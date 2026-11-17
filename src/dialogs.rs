@@ -6,7 +6,7 @@ use std::sync::atomic::Ordering;
 use egui::{vec2, Align, Color32, Layout, RichText, Sense, Stroke};
 
 use crate::app::{Action, AddDlg, CreateDlg, Dialog, ExtractDlg, JobKind, RustZipApp};
-use crate::engine::{self, Overwrite, ZipOptions};
+use crate::engine::{self, ArchiveKind, Method, Overwrite, PackOptions};
 use crate::icons;
 use crate::picker::{PickPurpose, PickResult, Picker};
 
@@ -37,13 +37,15 @@ impl RustZipApp {
                 ctx,
                 tr!("RustZip 정보", "About RustZip"),
                 tr!(
-                    "RustZip 0.1\n\nRust와 egui로 만든 압축 프로그램입니다.\n\
-                     열기: ZIP, 7Z, TAR, TAR.GZ, TAR.BZ2, TAR.XZ, GZ, BZ2, XZ\n\
-                     만들기: ZIP (압축 수준 0~9, AES-256 암호)\n\
+                    "RustZip 0.2\n\nRust와 egui로 만든 압축 프로그램입니다.\n\
+                     열기: ZIP, 7Z, RAR, ALZ, EGG, LZH, ARJ, CAB, ISO, TAR, CPIO, AR(DEB),\n\
+                     GZ, BZ2, XZ, LZMA, LZ, ZST, LZ4, BR, SZ, Z (TAR 안에 든 것 포함)\n\
+                     만들기: ZIP, 7Z, TAR와 TAR.GZ 등, 단일 파일 GZ/BZ2/XZ/ZST/LZ4/LZMA/LZ/BR/SZ\n\
                      한글(CP949/EUC-KR) 파일 이름을 자동으로 알아봅니다.",
-                    "RustZip 0.1\n\nAn archive manager written in Rust with egui.\n\
-                     Opens: ZIP, 7Z, TAR, TAR.GZ, TAR.BZ2, TAR.XZ, GZ, BZ2, XZ\n\
-                     Creates: ZIP (compression level 0-9, AES-256 password)\n\
+                    "RustZip 0.2\n\nAn archive manager written in Rust with egui.\n\
+                     Opens: ZIP, 7Z, RAR, ALZ, EGG, LZH, ARJ, CAB, ISO, TAR, CPIO, AR(DEB),\n\
+                     GZ, BZ2, XZ, LZMA, LZ, ZST, LZ4, BR, SZ, Z (also around TAR)\n\
+                     Creates: ZIP, 7Z, TAR and TAR.GZ etc., single-file GZ/BZ2/XZ/ZST/LZ4/LZMA/LZ/BR/SZ\n\
                      Recognises Korean (CP949/EUC-KR) file names automatically."
                 ),
                 false,
@@ -171,6 +173,59 @@ impl RustZipApp {
         });
     }
 
+    /// Archive type and algorithm; changing the type also changes the file name ending.
+    fn format_choice(ui: &mut egui::Ui, d: &mut CreateDlg) {
+        let old = d.kind;
+        ui.horizontal(|ui| {
+            ui.label(tr!("압축 형식:", "Format:"));
+            egui::ComboBox::from_id_salt("create_kind").selected_text(old.label()).height(400.0).show_ui(ui, |ui| {
+                for k in ArchiveKind::creatable() {
+                    let text = match k.filter {
+                        engine::Filter::None => k.label(),
+                        f => format!("{}  —  {}", k.label(), f.algorithm()),
+                    };
+                    ui.selectable_value(&mut d.kind, k, text);
+                }
+            });
+        });
+        if d.kind != old {
+            d.dest = match d.sources.as_slice() {
+                [only] if d.kind.single_file_only() && only.is_file() => format!("{}.{}", only.display(), d.kind.extension()),
+                [only] if old.single_file_only() && only.is_file() => {
+                    let stem = only.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+                    only.with_file_name(format!("{stem}.{}", d.kind.extension())).display().to_string()
+                }
+                _ => with_extension(&d.dest, old, d.kind),
+            };
+            if !d.kind.methods().contains(&d.method) {
+                d.method = d.kind.methods().first().copied().unwrap_or(Method::Deflate);
+            }
+            d.error = None;
+        }
+        if d.kind.single_file_only() {
+            ui.weak(tr!("이 형식은 파일 하나만 담습니다.", "This format holds a single file."));
+        }
+        let usable = d.kind.methods_for(d.use_password && d.kind.supports_password());
+        if !usable.is_empty() && !usable.contains(&d.method) {
+            d.method = usable[0];
+        }
+        Self::method_choice(ui, d.kind, &usable, &mut d.method);
+    }
+
+    fn method_choice(ui: &mut egui::Ui, kind: ArchiveKind, methods: &[Method], method: &mut Method) {
+        if methods.is_empty() {
+            return;
+        }
+        ui.horizontal(|ui| {
+            ui.label(tr!("압축 방식:", "Method:"));
+            egui::ComboBox::from_id_salt(("method", kind.label())).selected_text(method.label()).show_ui(ui, |ui| {
+                for &m in methods {
+                    ui.selectable_value(method, m, m.label());
+                }
+            });
+        });
+    }
+
     fn password_fields(ui: &mut egui::Ui, use_pw: &mut bool, pw: &mut String, pw2: Option<&mut String>, show: &mut bool) {
         ui.checkbox(use_pw, tr!("암호 걸기 (AES-256)", "Protect with a password (AES-256)"));
         if *use_pw {
@@ -222,7 +277,7 @@ impl RustZipApp {
         let mut keep = true;
         let m = egui::Modal::new(egui::Id::unique("dlg_create")).show(ctx, |ui| {
             ui.set_width(560.0);
-            ui.heading(tr!("새로 압축하기 (ZIP)", "New archive (ZIP)"));
+            ui.heading(tr!("새로 압축하기", "New archive"));
             ui.add_space(6.0);
             ui.label(RichText::new(tr!("압축할 파일과 폴더", "Files and folders to compress")).strong());
             Self::sources_list(ui, &mut d.sources);
@@ -241,8 +296,13 @@ impl RustZipApp {
                 }
             });
             ui.add_space(6.0);
+            Self::format_choice(ui, d);
             Self::level_slider(ui, &mut d.level);
-            Self::password_fields(ui, &mut d.use_password, &mut d.password, Some(&mut d.password2), &mut d.show_password);
+            if d.kind.supports_password() {
+                Self::password_fields(ui, &mut d.use_password, &mut d.password, Some(&mut d.password2), &mut d.show_password);
+            } else {
+                ui.weak(trf!("{} 형식은 암호를 걸 수 없습니다.", "{} archives cannot be password protected.", d.kind.label()));
+            }
             if let Some(e) = &d.error {
                 ui.colored_label(icons::RED, e);
             }
@@ -277,6 +337,7 @@ impl RustZipApp {
                 self.picker = Some(Picker::new(PickPurpose::AddSources, None, String::new()));
             }
             ui.add_space(6.0);
+            Self::method_choice(ui, ArchiveKind::ZIP, ArchiveKind::ZIP.methods(), &mut d.method);
             Self::level_slider(ui, &mut d.level);
             Self::password_fields(ui, &mut d.use_password, &mut d.password, None, &mut d.show_password);
             ui.weak(tr!("같은 이름의 항목은 새 파일로 바뀝니다.", "Items with the same name are replaced by the new files."));
@@ -288,7 +349,7 @@ impl RustZipApp {
                         listing: l,
                         sources: d.sources.clone(),
                         base: self.cur_dir.clone(),
-                        opts: ZipOptions { level: d.level, password: (d.use_password && !d.password.is_empty()).then(|| d.password.clone()) },
+                        opts: PackOptions { method: d.method, level: d.level, password: (d.use_password && !d.password.is_empty()).then(|| d.password.clone()) },
                     }));
                 }
                 keep = false;
@@ -421,6 +482,14 @@ impl RustZipApp {
             }
         });
     }
+}
+
+/// Swaps the archive-type ending of a file name (`자료.zip` → `자료.tar.zst`).
+fn with_extension(dest: &str, old: ArchiveKind, new: ArchiveKind) -> String {
+    let trimmed = dest.trim_end();
+    let old_ext = format!(".{}", old.extension());
+    let stem = if trimmed.to_lowercase().ends_with(&old_ext.to_lowercase()) { &trimmed[..trimmed.len() - old_ext.len()] } else { trimmed };
+    format!("{stem}.{}", new.extension())
 }
 
 fn message_dialog(ctx: &egui::Context, title: &str, text: &str, error: bool) -> bool {

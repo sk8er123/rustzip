@@ -71,7 +71,8 @@ pub fn folder(p: &Painter, r: Rect) {
 pub fn file(p: &Painter, r: Rect, name: &str) {
     let ext = name.rsplit_once('.').map(|(_, e)| e.to_lowercase()).unwrap_or_default();
     let color = match ext.as_str() {
-        "zip" | "7z" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "rar" | "alz" | "egg" => BOX,
+        "zip" | "7z" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "rar" | "alz" | "egg" | "lzh" | "lha" | "arj" | "cab" | "iso" | "cpio" | "deb" | "zst"
+        | "lz4" | "lzma" | "lz" | "br" | "sz" | "z" | "tbz" | "tbz2" | "txz" | "tzst" | "jar" => BOX,
         "jpg" | "jpeg" | "png" | "gif" | "bmp" | "webp" | "svg" => Color32::from_rgb(0x8E, 0x5C, 0xD9),
         "mp3" | "wav" | "flac" | "ogg" | "mp4" | "mkv" | "avi" | "mov" => Color32::from_rgb(0xD9, 0x5C, 0x9A),
         "exe" | "msi" | "dll" | "bat" | "sh" => RED,

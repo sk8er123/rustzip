@@ -273,7 +273,6 @@ fn describe_7z(e: &sevenz_rust2::Error) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use anyhow::Context as _;
 
     #[test]
     fn language_codes() {

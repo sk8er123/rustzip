@@ -165,7 +165,7 @@ fn demo_archive(dir: &Path) -> anyhow::Result<PathBuf> {
     let mut sources: Vec<PathBuf> = std::fs::read_dir(&src)?.flatten().map(|e| e.path()).collect();
     sources.sort();
     let dest = dir.join("샘플 자료.zip");
-    engine::create_zip(&dest, &sources, &engine::ZipOptions::default(), &engine::Progress::default())?;
+    engine::create(&dest, &sources, engine::ArchiveKind::ZIP, &engine::PackOptions::default(), &engine::Progress::default())?;
     Ok(dest)
 }
 

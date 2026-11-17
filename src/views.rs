@@ -435,6 +435,7 @@ impl RustZipApp {
             .column(Column::initial(90.0).at_least(60.0))
             .column(Column::initial(90.0).at_least(60.0))
             .column(Column::initial(70.0).at_least(50.0))
+            .column(Column::initial(100.0).at_least(60.0).clip(true))
             .column(Column::initial(140.0).at_least(100.0))
             .auto_shrink([false, false])
             .header(24.0, |mut header| {
@@ -442,6 +443,7 @@ impl RustZipApp {
                 header.col(|ui| self.header_cell(ui, tr!("크기", "Size"), SortCol::Size));
                 header.col(|ui| self.header_cell(ui, tr!("압축 크기", "Packed"), SortCol::Packed));
                 header.col(|ui| self.header_cell(ui, tr!("압축률", "Ratio"), SortCol::Ratio));
+                header.col(|ui| self.header_cell(ui, tr!("압축 방식", "Method"), SortCol::Method));
                 header.col(|ui| self.header_cell(ui, tr!("수정한 날짜", "Modified"), SortCol::Modified));
             })
             .body(|body| {
@@ -456,6 +458,7 @@ impl RustZipApp {
                         row.col(|ui| {
                             ui.add(egui::Label::new(RichText::new(tr!("상위 폴더", "Parent folder")).weak()).selectable(false));
                         });
+                        row.col(|_| {});
                         row.col(|_| {});
                         row.col(|_| {});
                         row.col(|_| {});
@@ -488,6 +491,9 @@ impl RustZipApp {
                     row.col(|ui| right(ui, if c.is_dir && c.file_count == 0 { String::new() } else { engine::format_size(c.size) }));
                     row.col(|ui| right(ui, c.packed.map(engine::format_size).unwrap_or_else(|| "-".into())));
                     row.col(|ui| right(ui, engine::ratio(c.size, c.packed).map(|r| format!("{r:.0}%")).unwrap_or_else(|| "-".into())));
+                    row.col(|ui| {
+                        ui.add(egui::Label::new(c.method.as_str()).truncate().selectable(false));
+                    });
                     row.col(|ui| {
                         let m = c.modified.map(|m| m.format("%Y-%m-%d %H:%M").to_string()).unwrap_or_default();
                         ui.add(egui::Label::new(m).selectable(false));

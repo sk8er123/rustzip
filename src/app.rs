@@ -6,7 +6,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use crate::engine::{self, archive_error, ArchiveError, Child, ExtractOptions, ExtractReport, Listing, NameEncoding, Overwrite, Progress, ZipOptions};
+use crate::engine::{self, archive_error, ArchiveError, Child, ExtractOptions, ExtractReport, Listing, NameEncoding, Overwrite, Progress, ArchiveKind, Method, PackOptions};
 use crate::picker::{PickPurpose, Picker};
 use crate::selftest::SelfTest;
 
@@ -18,8 +18,8 @@ use crate::selftest::SelfTest;
 pub enum JobKind {
     Open { path: PathBuf, encoding: NameEncoding, password: Option<String> },
     Extract { listing: Arc<Listing>, opts: ExtractOptions, then: AfterExtract },
-    Create { dest: PathBuf, sources: Vec<PathBuf>, opts: ZipOptions },
-    Add { listing: Arc<Listing>, sources: Vec<PathBuf>, base: String, opts: ZipOptions },
+    Create { dest: PathBuf, sources: Vec<PathBuf>, kind: ArchiveKind, opts: PackOptions },
+    Add { listing: Arc<Listing>, sources: Vec<PathBuf>, base: String, opts: PackOptions },
     Delete { listing: Arc<Listing>, selection: Vec<String> },
 }
 
@@ -75,8 +75,8 @@ fn run_job(kind: JobKind, progress: &Progress) -> anyhow::Result<JobOutcome> {
             let rep = engine::extract(&listing, &opts, progress)?;
             Ok(JobOutcome::Extracted(rep, then, dest))
         }
-        JobKind::Create { dest, sources, opts } => {
-            let n = engine::create_zip(&dest, &sources, &opts, progress)?;
+        JobKind::Create { dest, sources, kind, opts } => {
+            let n = engine::create(&dest, &sources, kind, &opts, progress)?;
             let l = engine::list(&dest, NameEncoding::Auto, &Progress::default())?;
             Ok(JobOutcome::Created(l, n))
         }
@@ -109,6 +109,8 @@ pub struct ExtractDlg {
 pub struct CreateDlg {
     pub sources: Vec<PathBuf>,
     pub dest: String,
+    pub kind: ArchiveKind,
+    pub method: Method,
     pub level: u8,
     pub use_password: bool,
     pub password: String,
@@ -119,6 +121,7 @@ pub struct CreateDlg {
 
 pub struct AddDlg {
     pub sources: Vec<PathBuf>,
+    pub method: Method,
     pub level: u8,
     pub use_password: bool,
     pub password: String,
@@ -142,6 +145,7 @@ pub enum SortCol {
     Size,
     Packed,
     Ratio,
+    Method,
     Modified,
 }
 
@@ -321,6 +325,7 @@ impl RustZipApp {
                     .unwrap_or(0.0)
                     .total_cmp(&engine::ratio(b.size, b.packed).unwrap_or(0.0)),
                 SortCol::Modified => a.modified.cmp(&b.modified),
+                SortCol::Method => a.method.cmp(&b.method),
             };
             let o = if asc { o } else { o.reverse() };
             b.is_dir.cmp(&a.is_dir).then(o)
@@ -364,12 +369,14 @@ impl RustZipApp {
         let Some(l) = &self.listing else { return String::new() };
         let name = l.path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
         let lower = name.to_lowercase();
-        for ext in [".tar.gz", ".tar.bz2", ".tar.xz", ".tgz", ".tbz2", ".txz", ".zip", ".7z", ".tar", ".gz", ".bz2", ".xz"] {
-            if lower.ends_with(ext) && name.len() > ext.len() {
+        let mut endings = vec![format!(".{}", l.kind.extension())];
+        endings.extend(l.kind.filter.tar_shorthands().iter().map(|s| format!(".{s}")));
+        for ext in endings {
+            if lower.ends_with(&ext.to_lowercase()) && name.len() > ext.len() {
                 return name[..name.len() - ext.len()].to_string();
             }
         }
-        name
+        l.path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or(name)
     }
 
     /// Builds the extract job from the dialog's choices (same path as pressing 압축 풀기).
@@ -417,7 +424,7 @@ impl RustZipApp {
             }
             None => crate::picker::home_dir().join(format!("{}.zip", tr!("새 압축 파일", "New archive"))).display().to_string(),
         };
-        CreateDlg { sources, dest, level: 6, use_password: false, password: String::new(), password2: String::new(), show_password: false, error: None }
+        CreateDlg { sources, dest, kind: ArchiveKind::ZIP, method: Method::Deflate, level: 6, use_password: false, password: String::new(), password2: String::new(), show_password: false, error: None }
     }
 
     /// Validates the create dialog and returns the job (same path as pressing 압축 시작).
@@ -432,9 +439,18 @@ impl RustZipApp {
             return None;
         }
         if dest.extension().is_none() {
-            dest.set_extension("zip");
+            dest.set_extension(dlg.kind.extension());
         }
-        if dlg.use_password {
+        if dlg.kind.single_file_only() && (dlg.sources.len() != 1 || dlg.sources[0].is_dir()) {
+            let f = dlg.kind.label();
+            dlg.error = Some(trf!(
+                "{f} 형식은 파일 하나만 담을 수 있습니다. 여러 파일이나 폴더는 TAR.{f} 형식을 고르세요.",
+                "{f} can hold only one file. Choose TAR.{f} for several files or folders."
+            ));
+            return None;
+        }
+        let use_password = dlg.use_password && dlg.kind.supports_password();
+        if use_password {
             if dlg.password.is_empty() {
                 dlg.error = Some(tr!("암호를 입력하세요.", "Enter a password.").into());
                 return None;
@@ -447,7 +463,8 @@ impl RustZipApp {
         Some(JobKind::Create {
             dest,
             sources: dlg.sources.clone(),
-            opts: ZipOptions { level: dlg.level, password: dlg.use_password.then(|| dlg.password.clone()) },
+            kind: dlg.kind,
+            opts: PackOptions { method: dlg.method, level: dlg.level, password: use_password.then(|| dlg.password.clone()) },
         })
     }
 
@@ -582,7 +599,7 @@ impl RustZipApp {
             Action::ShowAdd(v) => {
                 if self.editable() {
                     let empty = v.is_empty();
-                    self.dialog = Some(Dialog::Add(AddDlg { sources: v, level: 6, use_password: false, password: String::new(), show_password: false }));
+                    self.dialog = Some(Dialog::Add(AddDlg { sources: v, method: Method::Deflate, level: 6, use_password: false, password: String::new(), show_password: false }));
                     if empty {
                         self.picker = Some(Picker::new(PickPurpose::AddSources, None, String::new()));
                     }

@@ -106,11 +106,11 @@ fn zip_roundtrip_keeps_tree_and_contents() {
     let t = tmp();
     let src = make_tree(t.path());
     let zip_path = t.path().join("out.zip");
-    let n = create_zip(&zip_path, &[src.clone()], &ZipOptions::default(), &p()).unwrap();
+    let n = create(&zip_path, &[src.clone()], ArchiveKind::ZIP, &PackOptions::default(), &p()).unwrap();
     assert_eq!(n, 3);
 
     let listing = list(&zip_path, NameEncoding::Auto, &p()).unwrap();
-    assert_eq!(listing.kind, ArchiveKind::Zip);
+    assert_eq!(listing.kind, ArchiveKind::ZIP);
     assert_eq!(listing.file_count(), 3);
     assert!(listing.entries.iter().any(|e| e.path == "src/문서/보고서.txt" && !e.is_dir));
     let e = listing.entries.iter().find(|e| e.path == "src/hello.txt").unwrap();
@@ -132,8 +132,8 @@ fn compression_level_zero_stores_and_nine_shrinks() {
     fs::write(&f, "abcdefghij".repeat(10_000)).unwrap();
     let z0 = t.path().join("l0.zip");
     let z9 = t.path().join("l9.zip");
-    create_zip(&z0, &[f.clone()], &ZipOptions { level: 0, password: None }, &p()).unwrap();
-    create_zip(&z9, &[f.clone()], &ZipOptions { level: 9, password: None }, &p()).unwrap();
+    create(&z0, &[f.clone()], ArchiveKind::ZIP, &PackOptions { level: 0, password: None, ..Default::default() }, &p()).unwrap();
+    create(&z9, &[f.clone()], ArchiveKind::ZIP, &PackOptions { level: 9, password: None, ..Default::default() }, &p()).unwrap();
     let l0 = list(&z0, NameEncoding::Auto, &p()).unwrap();
     let l9 = list(&z9, NameEncoding::Auto, &p()).unwrap();
     assert_eq!(l0.entries[0].packed, Some(100_000));
@@ -146,7 +146,7 @@ fn aes_password_required_wrong_and_right() {
     let t = tmp();
     let src = make_tree(t.path());
     let zip_path = t.path().join("secret.zip");
-    create_zip(&zip_path, &[src.clone()], &ZipOptions { level: 6, password: Some("비밀1234".into()) }, &p()).unwrap();
+    create(&zip_path, &[src.clone()], ArchiveKind::ZIP, &PackOptions { level: 6, password: Some("비밀1234".into()), ..Default::default() }, &p()).unwrap();
     let listing = list(&zip_path, NameEncoding::Auto, &p()).unwrap();
     assert!(listing.any_encrypted());
     assert!(listing.entries.iter().filter(|e| !e.is_dir).all(|e| e.encrypted));
@@ -238,7 +238,7 @@ fn selected_extract_strips_current_folder() {
     let t = tmp();
     let src = make_tree(t.path());
     let zip_path = t.path().join("sel.zip");
-    create_zip(&zip_path, &[src], &ZipOptions::default(), &p()).unwrap();
+    create(&zip_path, &[src], ArchiveKind::ZIP, &PackOptions::default(), &p()).unwrap();
     let listing = list(&zip_path, NameEncoding::Auto, &p()).unwrap();
     let dest = t.path().join("d");
     let rep = extract(
@@ -264,7 +264,7 @@ fn overwrite_skip_and_rename() {
     let f = t.path().join("a.txt");
     fs::write(&f, "new").unwrap();
     let zip_path = t.path().join("o.zip");
-    create_zip(&zip_path, &[f], &ZipOptions::default(), &p()).unwrap();
+    create(&zip_path, &[f], ArchiveKind::ZIP, &PackOptions::default(), &p()).unwrap();
     let listing = list(&zip_path, NameEncoding::Auto, &p()).unwrap();
     let dest = t.path().join("d");
     fs::create_dir_all(&dest).unwrap();
@@ -297,7 +297,7 @@ fn add_and_delete_in_existing_zip() {
     raw_zip(&zip_path, &[(&kname, b"legacy")], 0);
 
     let listing = list(&zip_path, NameEncoding::Auto, &p()).unwrap();
-    let added = add_to_zip(&listing, &[src.join("hello.txt"), src.join("문서")], "새폴더", &ZipOptions::default(), &p()).unwrap();
+    let added = add_to_zip(&listing, &[src.join("hello.txt"), src.join("문서")], "새폴더", &PackOptions::default(), &p()).unwrap();
     assert_eq!(added, 3);
     let listing = list(&zip_path, NameEncoding::Auto, &p()).unwrap();
     let names: HashSet<_> = listing.entries.iter().map(|e| e.path.clone()).collect();
@@ -306,7 +306,7 @@ fn add_and_delete_in_existing_zip() {
     assert!(names.contains("새폴더/문서/깊은/data.bin"));
 
     // Re-adding the same file replaces it rather than duplicating it.
-    add_to_zip(&listing, &[src.join("hello.txt")], "새폴더", &ZipOptions::default(), &p()).unwrap();
+    add_to_zip(&listing, &[src.join("hello.txt")], "새폴더", &PackOptions::default(), &p()).unwrap();
     let listing = list(&zip_path, NameEncoding::Auto, &p()).unwrap();
     assert_eq!(listing.entries.iter().filter(|e| e.path == "새폴더/hello.txt").count(), 1);
 
@@ -325,9 +325,9 @@ fn add_with_password_to_existing_zip() {
     let t = tmp();
     let src = make_tree(t.path());
     let zip_path = t.path().join("p.zip");
-    create_zip(&zip_path, &[src.join("hello.txt")], &ZipOptions::default(), &p()).unwrap();
+    create(&zip_path, &[src.join("hello.txt")], ArchiveKind::ZIP, &PackOptions::default(), &p()).unwrap();
     let listing = list(&zip_path, NameEncoding::Auto, &p()).unwrap();
-    add_to_zip(&listing, &[src.join("문서/보고서.txt")], "", &ZipOptions { level: 6, password: Some("pw".into()) }, &p()).unwrap();
+    add_to_zip(&listing, &[src.join("문서/보고서.txt")], "", &PackOptions { level: 6, password: Some("pw".into()), ..Default::default() }, &p()).unwrap();
     let listing = list(&zip_path, NameEncoding::Auto, &p()).unwrap();
     let enc: Vec<_> = listing.entries.iter().filter(|e| e.encrypted).map(|e| e.path.as_str()).collect();
     assert_eq!(enc, vec!["보고서.txt"]);
@@ -361,30 +361,30 @@ fn tar_and_compressed_tars() {
 
     let tar_path = t.path().join("a.tar");
     fs::write(&tar_path, &tar_bytes).unwrap();
-    check_tar_like(&tar_path, ArchiveKind::Tar, &src);
+    check_tar_like(&tar_path, ArchiveKind::TAR, &src);
 
     let gz_path = t.path().join("a.tar.gz");
     let mut gz = flate2::write::GzEncoder::new(File::create(&gz_path).unwrap(), flate2::Compression::default());
     gz.write_all(&tar_bytes).unwrap();
     gz.finish().unwrap();
-    check_tar_like(&gz_path, ArchiveKind::TarGz, &src);
+    check_tar_like(&gz_path, ArchiveKind::new(Container::Tar, Filter::Gzip), &src);
 
     // Detection is by content, not by extension.
     let tgz = t.path().join("renamed.bin");
     fs::copy(&gz_path, &tgz).unwrap();
-    assert_eq!(detect_kind(&tgz).unwrap(), ArchiveKind::TarGz);
+    assert_eq!(detect_kind(&tgz).unwrap(), ArchiveKind::new(Container::Tar, Filter::Gzip));
 
     let bz_path = t.path().join("a.tar.bz2");
     let mut bz = bzip2::write::BzEncoder::new(File::create(&bz_path).unwrap(), bzip2::Compression::default());
     bz.write_all(&tar_bytes).unwrap();
     bz.finish().unwrap();
-    check_tar_like(&bz_path, ArchiveKind::TarBz2, &src);
+    check_tar_like(&bz_path, ArchiveKind::new(Container::Tar, Filter::Bzip2), &src);
 
     let xz_path = t.path().join("a.tar.xz");
     let mut xz = lzma_rust2::XzWriter::new(File::create(&xz_path).unwrap(), lzma_rust2::XzOptions::with_preset(6)).unwrap();
     xz.write_all(&tar_bytes).unwrap();
     xz.finish().unwrap();
-    check_tar_like(&xz_path, ArchiveKind::TarXz, &src);
+    check_tar_like(&xz_path, ArchiveKind::new(Container::Tar, Filter::Xz), &src);
 }
 
 #[test]
@@ -400,7 +400,7 @@ fn single_gz_file() {
     gz.finish().unwrap();
 
     let listing = list(&gz_path, NameEncoding::Auto, &p()).unwrap();
-    assert_eq!(listing.kind, ArchiveKind::Gz);
+    assert_eq!(listing.kind, ArchiveKind::new(Container::Raw, Filter::Gzip));
     assert_eq!(listing.entries.len(), 1);
     let e = &listing.entries[0];
     assert_eq!(e.path, "server.log");
@@ -418,7 +418,7 @@ fn sevenz_extract() {
     let path = t.path().join("a.7z");
     sevenz_rust2::compress_to_path(&src, &path).unwrap();
     let listing = list(&path, NameEncoding::Auto, &p()).unwrap();
-    assert_eq!(listing.kind, ArchiveKind::SevenZ);
+    assert_eq!(listing.kind, ArchiveKind::SEVENZ);
     assert_eq!(listing.file_count(), 3);
     let data_entry = listing.entries.iter().find(|e| e.path.ends_with("깊은/data.bin")).unwrap();
     assert_eq!(data_entry.size, 5000);
@@ -486,7 +486,7 @@ fn cancel_stops_extraction() {
     let t = tmp();
     let src = make_tree(t.path());
     let zip_path = t.path().join("c.zip");
-    create_zip(&zip_path, &[src], &ZipOptions::default(), &p()).unwrap();
+    create(&zip_path, &[src], ArchiveKind::ZIP, &PackOptions::default(), &p()).unwrap();
     let listing = list(&zip_path, NameEncoding::Auto, &p()).unwrap();
     let prog = p();
     prog.cancel.store(true, Ordering::Relaxed);
@@ -535,7 +535,7 @@ fn damaged_archive_errors_are_translated() {
 
     // A ZIP whose stored data was changed after it was written.
     let zip_path = t.path().join("flipped.zip");
-    create_zip(&zip_path, &[src.join("hello.txt")], &ZipOptions { level: 0, password: None }, &p()).unwrap();
+    create(&zip_path, &[src.join("hello.txt")], ArchiveKind::ZIP, &PackOptions { level: 0, password: None, ..Default::default() }, &p()).unwrap();
     let mut b = fs::read(&zip_path).unwrap();
     for x in &mut b[100..140] {
         *x ^= 0xFF;

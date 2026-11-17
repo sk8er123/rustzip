@@ -13,6 +13,15 @@ use std::sync::{Arc, Mutex};
 use anyhow::{anyhow, bail, Context as _, Result};
 use chrono::{DateTime, Local, NaiveDateTime, TimeZone};
 
+mod codec;
+mod create;
+mod filter;
+mod formats;
+mod lzw;
+mod walk;
+
+pub use filter::Filter;
+
 // ---------------------------------------------------------------------------
 // Errors that the GUI reacts to specially
 // ---------------------------------------------------------------------------
@@ -133,62 +142,141 @@ fn copy_with_progress(r: &mut dyn Read, w: &mut dyn Write, p: &Progress) -> Resu
     Ok(total)
 }
 
-/// A reader that counts the bytes read from the compressed file (for tar listing progress).
-struct CountingReader<'a, R> {
-    inner: R,
-    progress: &'a Progress,
-}
-
-impl<R: Read> Read for CountingReader<'_, R> {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        if self.progress.cancelled() {
-            return Err(io::Error::new(io::ErrorKind::Interrupted, "cancelled"));
-        }
-        let n = self.inner.read(buf)?;
-        self.progress.add(n as u64);
-        Ok(n)
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Formats and name encodings
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ArchiveKind {
+/// The archive structure, independent of any outer compression.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Container {
     Zip,
     SevenZ,
+    Rar,
     Tar,
-    TarGz,
-    TarBz2,
-    TarXz,
-    Gz,
-    Bz2,
-    Xz,
+    Cpio,
+    Ar,
+    Lzh,
+    Arj,
+    Cab,
+    Iso,
+    Alz,
+    Egg,
+    /// A single compressed file (`a.txt.gz`); the filter says how.
+    Raw,
+}
+
+impl Container {
+    pub fn label(self) -> &'static str {
+        match self {
+            Container::Zip => "ZIP",
+            Container::SevenZ => "7Z",
+            Container::Rar => "RAR",
+            Container::Tar => "TAR",
+            Container::Cpio => "CPIO",
+            Container::Ar => "AR",
+            Container::Lzh => "LZH",
+            Container::Arj => "ARJ",
+            Container::Cab => "CAB",
+            Container::Iso => "ISO",
+            Container::Alz => "ALZ",
+            Container::Egg => "EGG",
+            Container::Raw => "",
+        }
+    }
+
+    /// The entry-by-entry reader, for formats that have one.
+    fn walker(self) -> Option<walk::Walker> {
+        Some(match self {
+            Container::Tar => formats::tar::walk,
+            Container::Cpio => formats::cpio::walk,
+            Container::Ar => formats::ar::walk,
+            Container::Lzh => formats::lzh::walk,
+            Container::Arj => formats::arj::walk,
+            Container::Cab => formats::cab::walk,
+            Container::Iso => formats::iso::walk,
+            Container::Alz => formats::alz::walk,
+            Container::Egg => formats::egg::walk,
+            Container::Zip | Container::SevenZ | Container::Rar | Container::Raw => return None,
+        })
+    }
+}
+
+/// What a file is: a container, optionally inside a compression filter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ArchiveKind {
+    pub container: Container,
+    pub filter: Filter,
 }
 
 impl ArchiveKind {
-    pub fn label(self) -> &'static str {
-        match self {
-            ArchiveKind::Zip => "ZIP",
-            ArchiveKind::SevenZ => "7Z",
-            ArchiveKind::Tar => "TAR",
-            ArchiveKind::TarGz => "TAR.GZ",
-            ArchiveKind::TarBz2 => "TAR.BZ2",
-            ArchiveKind::TarXz => "TAR.XZ",
-            ArchiveKind::Gz => "GZ",
-            ArchiveKind::Bz2 => "BZ2",
-            ArchiveKind::Xz => "XZ",
+    pub const ZIP: ArchiveKind = ArchiveKind::plain(Container::Zip);
+    pub const SEVENZ: ArchiveKind = ArchiveKind::plain(Container::SevenZ);
+    pub const TAR: ArchiveKind = ArchiveKind::plain(Container::Tar);
+
+    pub const fn plain(container: Container) -> Self {
+        Self { container, filter: Filter::None }
+    }
+    pub const fn new(container: Container, filter: Filter) -> Self {
+        Self { container, filter }
+    }
+
+    pub fn label(self) -> String {
+        match (self.container, self.filter) {
+            (Container::Raw, f) => f.label().to_string(),
+            (c, Filter::None) => c.label().to_string(),
+            (c, f) => format!("{}.{}", c.label(), f.label()),
         }
     }
-    pub fn is_editable(self) -> bool {
-        self == ArchiveKind::Zip
+
+    /// The usual file name ending, without the dot (`tar.gz`, `zip`, `zst`).
+    pub fn extension(self) -> String {
+        let base = match self.container {
+            Container::Raw => return self.filter.ext().to_string(),
+            Container::SevenZ => "7z".to_string(),
+            c => c.label().to_lowercase(),
+        };
+        match self.filter {
+            Filter::None => base,
+            f => format!("{base}.{}", f.ext()),
+        }
     }
-    fn is_tar(self) -> bool {
-        matches!(
-            self,
-            ArchiveKind::Tar | ArchiveKind::TarGz | ArchiveKind::TarBz2 | ArchiveKind::TarXz
-        )
+
+    pub fn is_editable(self) -> bool {
+        self == ArchiveKind::ZIP
+    }
+
+    /// Every kind RustZip can create, in menu order.
+    pub fn creatable() -> Vec<ArchiveKind> {
+        let filters = Filter::ALL.into_iter().filter(|f| f.can_write());
+        [ArchiveKind::ZIP, ArchiveKind::SEVENZ, ArchiveKind::TAR]
+            .into_iter()
+            .chain(filters.clone().map(|f| ArchiveKind::new(Container::Tar, f)))
+            .chain(filters.map(|f| ArchiveKind::new(Container::Raw, f)))
+            .collect()
+    }
+
+    /// Algorithms to choose from inside the archive (empty: the filter decides).
+    pub fn methods(self) -> &'static [Method] {
+        match self.container {
+            Container::Zip => &[Method::Deflate, Method::Bzip2, Method::Xz, Method::Zstd, Method::Ppmd, Method::Store],
+            Container::SevenZ => &[Method::Lzma2, Method::Lzma, Method::Ppmd, Method::Bzip2, Method::Deflate, Method::Zstd, Method::Brotli, Method::Lz4, Method::Store],
+            _ => &[],
+        }
+    }
+
+    /// [`Self::methods`] minus the ones that cannot be combined with a password.
+    /// sevenz-rust2's Brotli decoder reads past the stream into the AES padding.
+    pub fn methods_for(self, password: bool) -> Vec<Method> {
+        self.methods().iter().copied().filter(|&m| !(password && self.container == Container::SevenZ && m == Method::Brotli)).collect()
+    }
+
+    pub fn supports_password(self) -> bool {
+        matches!(self.container, Container::Zip | Container::SevenZ) && self.filter == Filter::None
+    }
+
+    /// Single compressed files (`.gz`, `.zst`) hold exactly one file.
+    pub fn single_file_only(self) -> bool {
+        self.container == Container::Raw
     }
 }
 
@@ -294,7 +382,7 @@ pub fn safe_relative_path(name: &str) -> Option<PathBuf> {
 }
 
 const SEVENZ_MAGIC: [u8; 6] = [b'7', b'z', 0xBC, 0xAF, 0x27, 0x1C];
-const XZ_MAGIC: [u8; 6] = [0xFD, b'7', b'z', b'X', b'Z', 0x00];
+const RAR_MAGIC: &[u8] = b"Rar!\x1a\x07";
 
 fn looks_like_tar(header: &[u8]) -> bool {
     if header.len() < 512 {
@@ -331,51 +419,91 @@ fn read_up_to(r: &mut dyn Read, n: usize) -> Vec<u8> {
     buf
 }
 
-/// Opens a decompressing reader for single-stream formats.
-fn decompressor(kind: ArchiveKind, file: File) -> Box<dyn Read> {
-    let r = BufReader::new(file);
-    match kind {
-        ArchiveKind::TarGz | ArchiveKind::Gz => Box::new(flate2::read::MultiGzDecoder::new(r)),
-        ArchiveKind::TarBz2 | ArchiveKind::Bz2 => Box::new(bzip2::read::MultiBzDecoder::new(r)),
-        ArchiveKind::TarXz | ArchiveKind::Xz => Box::new(lzma_rust2::XzReader::new(r, true)),
-        _ => Box::new(r),
+fn looks_like_cpio(h: &[u8]) -> bool {
+    h.starts_with(b"070707") || h.starts_with(b"070701") || h.starts_with(b"070702") || h.starts_with(&[0xC7, 0x71]) || h.starts_with(&[0x71, 0xC7])
+}
+
+fn looks_like_lzh(h: &[u8]) -> bool {
+    h.len() > 21 && h[2] == b'-' && h[6] == b'-' && matches!(&h[3..5], b"lh" | b"lz" | b"pm")
+}
+
+/// Containers that can be told apart by their first bytes.
+fn sniff_container(h: &[u8]) -> Option<Container> {
+    let c = if h.starts_with(b"PK\x03\x04") || h.starts_with(b"PK\x05\x06") || h.starts_with(b"PK\x07\x08") {
+        Container::Zip
+    } else if h.starts_with(&SEVENZ_MAGIC) {
+        Container::SevenZ
+    } else if h.starts_with(RAR_MAGIC) {
+        Container::Rar
+    } else if h.starts_with(b"ALZ\x01") {
+        Container::Alz
+    } else if h.starts_with(b"EGGA") {
+        Container::Egg
+    } else if h.starts_with(b"MSCF") {
+        Container::Cab
+    } else if h.starts_with(&[0x60, 0xEA]) {
+        Container::Arj
+    } else if h.starts_with(b"!<arch>\n") {
+        Container::Ar
+    } else if looks_like_cpio(h) {
+        Container::Cpio
+    } else if looks_like_lzh(h) {
+        Container::Lzh
+    } else if looks_like_tar(h) {
+        Container::Tar
+    } else {
+        return None;
+    };
+    Some(c)
+}
+
+fn is_iso(f: &mut File) -> bool {
+    let mut b = [0u8; 5];
+    f.seek(SeekFrom::Start(0x8001)).is_ok() && f.read_exact(&mut b).is_ok() && &b == b"CD001"
+}
+
+/// Self-extracting `.exe`: a ZIP or RAR appended to a Windows program.
+fn sniff_sfx(path: &Path) -> Option<Container> {
+    if zip::ZipArchive::new(BufReader::new(File::open(path).ok()?)).is_ok() {
+        return Some(Container::Zip);
     }
+    let head = read_up_to(&mut File::open(path).ok()?, 4 << 20);
+    head.windows(RAR_MAGIC.len()).any(|w| w == RAR_MAGIC).then_some(Container::Rar)
+}
+
+fn lower_ext(path: &Path) -> String {
+    path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default()
 }
 
 /// Works out the archive type from the file's first bytes (falling back to the extension).
 pub fn detect_kind(path: &Path) -> Result<ArchiveKind> {
     let mut f = File::open(path).with_context(|| trf!("파일을 열 수 없습니다: {}", "Cannot open the file: {}", path.display()))?;
     let head = read_up_to(&mut f, 512);
-    let lower = path.to_string_lossy().to_lowercase();
-    let kind = if head.starts_with(b"PK\x03\x04") || head.starts_with(b"PK\x05\x06") || head.starts_with(b"PK\x07\x08") {
-        ArchiveKind::Zip
-    } else if head.starts_with(&SEVENZ_MAGIC) {
-        ArchiveKind::SevenZ
-    } else if head.starts_with(&[0x1f, 0x8b]) || head.starts_with(b"BZh") || head.starts_with(&XZ_MAGIC) {
-        let (tar_kind, single) = if head.starts_with(&[0x1f, 0x8b]) {
-            (ArchiveKind::TarGz, ArchiveKind::Gz)
-        } else if head.starts_with(b"BZh") {
-            (ArchiveKind::TarBz2, ArchiveKind::Bz2)
-        } else {
-            (ArchiveKind::TarXz, ArchiveKind::Xz)
+    let ext = lower_ext(path);
+    if let Some(c) = sniff_container(&head) {
+        return Ok(ArchiveKind::plain(c));
+    }
+    if let Some(filter) = Filter::sniff(&head, &ext) {
+        let inner = filter.reader(File::open(path)?).map(|mut r| read_up_to(&mut r, 512)).unwrap_or_default();
+        let container = match sniff_container(&inner) {
+            Some(c @ (Container::Tar | Container::Cpio | Container::Ar)) => c,
+            _ => Container::Raw,
         };
-        let mut d = decompressor(tar_kind, File::open(path)?);
-        let inner = read_up_to(&mut d, 512);
-        if looks_like_tar(&inner) {
-            tar_kind
-        } else {
-            single
+        return Ok(ArchiveKind::new(container, filter));
+    }
+    if is_iso(&mut f) {
+        return Ok(ArchiveKind::plain(Container::Iso));
+    }
+    if head.starts_with(b"MZ") {
+        if let Some(c) = sniff_sfx(path) {
+            return Ok(ArchiveKind::plain(c));
         }
-    } else if looks_like_tar(&head) {
-        ArchiveKind::Tar
-    } else if lower.ends_with(".zip") {
-        ArchiveKind::Zip
-    } else if lower.ends_with(".tar") {
-        ArchiveKind::Tar
-    } else {
-        bail!(tr!("지원하지 않는 압축 형식이거나 손상된 파일입니다.", "Unsupported archive format, or the file is damaged."));
-    };
-    Ok(kind)
+    }
+    match ext.as_str() {
+        "zip" => Ok(ArchiveKind::ZIP),
+        "tar" => Ok(ArchiveKind::TAR),
+        _ => bail!(tr!("지원하지 않는 압축 형식이거나 손상된 파일입니다.", "Unsupported archive format, or the file is damaged.")),
+    }
 }
 
 /// True when the path looks like an archive RustZip can open (cheap, for drag and drop).
@@ -440,6 +568,13 @@ fn unix_to_naive(secs: i64) -> Option<NaiveDateTime> {
     Local.timestamp_opt(secs, 0).single().map(|d| d.naive_local())
 }
 
+/// MS-DOS packed date and time (used by RAR, ALZ, ARJ...).
+pub(crate) fn dos_to_naive(t: u32) -> Option<NaiveDateTime> {
+    let (date, time) = (t >> 16, t & 0xFFFF);
+    chrono::NaiveDate::from_ymd_opt(1980 + (date >> 9) as i32, (date >> 5) & 0xF, date & 0x1F)
+        .and_then(|d| d.and_hms_opt(time >> 11, (time >> 5) & 0x3F, (time & 0x1F) * 2))
+}
+
 fn nt_to_naive(t: sevenz_rust2::NtTime) -> Option<NaiveDateTime> {
     let ticks: u64 = t.into();
     if ticks == 0 {
@@ -451,7 +586,7 @@ fn nt_to_naive(t: sevenz_rust2::NtTime) -> Option<NaiveDateTime> {
 
 fn zip_method_label(m: zip::CompressionMethod) -> String {
     match m {
-        zip::CompressionMethod::Stored => "저장".into(),
+        zip::CompressionMethod::Stored => tr!("저장", "Store").into(),
         zip::CompressionMethod::Deflated => "Deflate".into(),
         other => format!("{other:?}"),
     }
@@ -465,11 +600,15 @@ pub fn list(path: &Path, encoding: NameEncoding, progress: &Progress) -> Result<
 pub fn list_with_password(path: &Path, encoding: NameEncoding, password: Option<&str>, progress: &Progress) -> Result<Listing> {
     let kind = detect_kind(path)?;
     let archive_size = fs::metadata(path)?.len();
-    let entries = match kind {
-        ArchiveKind::Zip => list_zip(path, encoding),
-        ArchiveKind::SevenZ => list_7z(path, password),
-        k if k.is_tar() => list_tar(path, k, encoding, progress),
-        k => list_single(path, k, progress),
+    let entries = match kind.container {
+        Container::Zip => list_zip(path, encoding),
+        Container::SevenZ => list_7z(path, password),
+        Container::Rar => formats::rar::list(path, password),
+        Container::Raw => list_single(path, kind.filter, progress),
+        c => {
+            let walker = c.walker().expect("walker for entry-by-entry formats");
+            walk::list(walker, &walk::Source { path, filter: kind.filter, encoding, password, input: progress })
+        }
     }
     .map_err(|e| with_note(e, || trf!("{} 파일의 목록을 읽을 수 없습니다.", "Cannot read the contents of the {} file.", kind.label())))?;
     Ok(Listing { path: path.to_path_buf(), kind, entries, encoding, archive_size })
@@ -523,6 +662,17 @@ fn list_7z(path: &Path, password: Option<&str>) -> Result<Vec<Entry>> {
         if p.is_empty() || f.is_anti_item {
             continue;
         }
+        let coders: Vec<&'static str> = archive
+            .stream_map
+            .file_block_index
+            .get(i)
+            .copied()
+            .flatten()
+            .and_then(|b| archive.blocks.get(b))
+            .map(|b| b.coders.iter().filter_map(|c| sevenz_rust2::EncoderMethod::by_id(c.encoder_method_id())).map(|m| m.name()).collect())
+            .unwrap_or_default();
+        let encrypted = coders.contains(&sevenz_rust2::EncoderMethod::AES256_SHA256.name());
+        let method = coders.iter().filter(|&&n| n != sevenz_rust2::EncoderMethod::AES256_SHA256.name()).copied().collect::<Vec<_>>().join("+");
         out.push(Entry {
             index: i,
             path: p,
@@ -530,8 +680,8 @@ fn list_7z(path: &Path, password: Option<&str>) -> Result<Vec<Entry>> {
             size: f.size,
             packed: None,
             modified: if f.has_last_modified_date { nt_to_naive(f.last_modified_date) } else { None },
-            encrypted: false,
-            method: "7z".into(),
+            encrypted,
+            method: if method.is_empty() { "7z".into() } else { method },
         });
     }
     // Per-entry packed sizes are not stored in 7z (blocks are shared); spread the
@@ -546,96 +696,43 @@ fn list_7z(path: &Path, password: Option<&str>) -> Result<Vec<Entry>> {
     Ok(out)
 }
 
-fn tar_entry_path(entry: &tar::Entry<'_, impl Read>, encoding: NameEncoding) -> String {
-    let raw = entry.path_bytes();
-    normalize_entry_path(&decode_name(&raw, false, encoding))
-}
-
-fn list_tar(path: &Path, kind: ArchiveKind, encoding: NameEncoding, progress: &Progress) -> Result<Vec<Entry>> {
-    let file = File::open(path)?;
-    progress.set_total(file.metadata()?.len());
-    let counting = CountingReader { inner: file, progress };
-    let reader: Box<dyn Read + '_> = match kind {
-        ArchiveKind::TarGz => Box::new(flate2::read::MultiGzDecoder::new(BufReader::new(counting))),
-        ArchiveKind::TarBz2 => Box::new(bzip2::read::MultiBzDecoder::new(BufReader::new(counting))),
-        ArchiveKind::TarXz => Box::new(lzma_rust2::XzReader::new(BufReader::new(counting), true)),
-        _ => Box::new(BufReader::new(counting)),
-    };
-    let mut ar = tar::Archive::new(reader);
-    let mut out = Vec::new();
-    for (i, entry) in ar.entries()?.enumerate() {
-        progress.check()?;
-        let entry = entry.map_err(|e| if progress.cancelled() { ArchiveError::Cancelled.into() } else { anyhow!(e) })?;
-        let et = entry.header().entry_type();
-        if !(et.is_file() || et.is_dir() || et == tar::EntryType::GNUSparse) {
-            continue; // links, pax headers...
-        }
-        let p = tar_entry_path(&entry, encoding);
-        if p.is_empty() {
-            continue;
-        }
-        let size = entry.header().size().unwrap_or(0);
-        out.push(Entry {
-            index: i,
-            path: p,
-            is_dir: et.is_dir(),
-            size: if et.is_dir() { 0 } else { size },
-            packed: None,
-            modified: entry.header().mtime().ok().and_then(|m| unix_to_naive(m as i64)),
-            encrypted: false,
-            method: kind.label().into(),
-        });
+/// Name of the file inside a single-file archive: `a.txt.gz` holds `a.txt`.
+fn single_inner_name(path: &Path, filter: Filter) -> String {
+    let name = path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let lower = name.to_lowercase();
+    let ext = format!(".{}", filter.ext().to_lowercase());
+    if lower.ends_with(&ext) && lower.len() > ext.len() {
+        return name[..name.len() - ext.len()].to_string();
     }
-    Ok(out)
-}
-
-fn single_inner_name(path: &Path, kind: ArchiveKind) -> String {
-    let stem = path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-    let lower = stem.to_lowercase();
-    let ext = match kind {
-        ArchiveKind::Gz => ".gz",
-        ArchiveKind::Bz2 => ".bz2",
-        _ => ".xz",
-    };
-    if lower.ends_with(ext) {
-        stem[..stem.len() - ext.len()].to_string()
-    } else {
-        format!("{stem}.out")
+    for short in filter.tar_shorthands() {
+        if let Some(stem) = lower.strip_suffix(&format!(".{short}")) {
+            return format!("{}.tar", &name[..stem.len()]);
+        }
     }
+    format!("{name}.out")
 }
 
-fn list_single(path: &Path, kind: ArchiveKind, progress: &Progress) -> Result<Vec<Entry>> {
+fn list_single(path: &Path, filter: Filter, progress: &Progress) -> Result<Vec<Entry>> {
     let packed = fs::metadata(path)?.len();
-    let mut name = single_inner_name(path, kind);
+    let mut name = single_inner_name(path, filter);
     let mut modified = fs::metadata(path)?.modified().ok().map(|t| DateTime::<Local>::from(t).naive_local());
-    let size;
-    if kind == ArchiveKind::Gz {
-        let gz = flate2::read::GzDecoder::new(File::open(path)?);
-        if let Some(h) = gz.header() {
+    if filter == Filter::Gzip {
+        if let Some(h) = flate2::read::GzDecoder::new(File::open(path)?).header() {
             if let Some(n) = h.filename() {
                 let n = normalize_entry_path(&decode_name(n, false, NameEncoding::Auto));
-                if let Some(last) = n.rsplit('/').next() {
-                    if !last.is_empty() {
-                        name = last.to_string();
-                    }
+                if let Some(last) = n.rsplit('/').next().filter(|l| !l.is_empty()) {
+                    name = last.to_string();
                 }
             }
             if h.mtime() != 0 {
                 modified = unix_to_naive(h.mtime() as i64);
             }
         }
-        // ISIZE trailer: uncompressed size mod 2^32 (exact below 4 GiB, single member).
-        let mut f = File::open(path)?;
-        f.seek(SeekFrom::End(-4))?;
-        let mut b = [0u8; 4];
-        f.read_exact(&mut b)?;
-        size = u32::from_le_bytes(b) as u64;
-    } else {
-        progress.set_total(packed);
-        let mut d = decompressor(kind, File::open(path)?);
-        size = copy_with_progress(&mut d, &mut io::sink(), &Progress::default())?;
-        progress.add(packed);
     }
+    // Only decompressing tells the real size; count compressed bytes for the progress bar.
+    let mut d = filter.reader(walk::CountingReader { inner: File::open(path)?, progress })?;
+    progress.set_total(packed);
+    let size = io::copy(&mut d, &mut io::sink()).map_err(|e| walk::cancel_aware(e, progress))?;
     Ok(vec![Entry {
         index: 0,
         path: name,
@@ -644,7 +741,7 @@ fn list_single(path: &Path, kind: ArchiveKind, progress: &Progress) -> Result<Ve
         packed: Some(packed),
         modified,
         encrypted: false,
-        method: kind.label().into(),
+        method: filter.algorithm().into(),
     }])
 }
 
@@ -662,6 +759,8 @@ pub struct Child {
     pub packed: Option<u64>,
     pub modified: Option<NaiveDateTime>,
     pub encrypted: bool,
+    /// Compression method of a file; empty for folders.
+    pub method: String,
     /// Number of files below a folder.
     pub file_count: usize,
 }
@@ -686,6 +785,7 @@ pub fn children(entries: &[Entry], dir: &str) -> Vec<Child> {
                     packed: None,
                     modified: None,
                     encrypted: false,
+                    method: String::new(),
                     file_count: 0,
                 });
                 if !e.is_dir {
@@ -705,6 +805,7 @@ pub fn children(entries: &[Entry], dir: &str) -> Vec<Child> {
                     packed: None,
                     modified: None,
                     encrypted: false,
+                    method: String::new(),
                     file_count: 0,
                 });
                 c.modified = e.modified;
@@ -720,6 +821,7 @@ pub fn children(entries: &[Entry], dir: &str) -> Vec<Child> {
                         packed: e.packed,
                         modified: e.modified,
                         encrypted: e.encrypted,
+                        method: e.method.clone(),
                         file_count: 1,
                     },
                 );
@@ -870,11 +972,22 @@ pub fn extract(listing: &Listing, opts: &ExtractOptions, progress: &Progress) ->
     let total: u64 = listing.entries.iter().filter(|e| selected(e) && !e.is_dir).map(|e| e.size).sum();
     progress.set_total(total.max(1));
     let mut planner = Planner { opts, report: ExtractReport::default() };
-    match listing.kind {
-        ArchiveKind::Zip => extract_zip(listing, &mut planner, progress)?,
-        ArchiveKind::SevenZ => extract_7z(listing, &mut planner, progress)?,
-        k if k.is_tar() => extract_tar(listing, &mut planner, progress)?,
-        _ => extract_single(listing, &mut planner, progress)?,
+    match listing.kind.container {
+        Container::Zip => extract_zip(listing, &mut planner, progress)?,
+        Container::SevenZ => extract_7z(listing, &mut planner, progress)?,
+        Container::Rar => formats::rar::extract(listing, &mut planner, progress)?,
+        Container::Raw => extract_single(listing, &mut planner, progress)?,
+        c => {
+            let walker = c.walker().expect("walker for entry-by-entry formats");
+            let src = walk::Source {
+                path: &listing.path,
+                filter: listing.kind.filter,
+                encoding: listing.encoding,
+                password: opts.password.as_deref(),
+                input: &Progress::default(),
+            };
+            walk::extract(walker, &src, &mut planner, progress).map_err(|e| walk::cancel_aware(e, progress))?;
+        }
     }
     Ok(planner.report)
 }
@@ -978,52 +1091,11 @@ fn extract_7z(listing: &Listing, planner: &mut Planner<'_>, progress: &Progress)
     Ok(())
 }
 
-fn extract_tar(listing: &Listing, planner: &mut Planner<'_>, progress: &Progress) -> Result<()> {
-    let reader = decompressor(listing.kind, File::open(&listing.path)?);
-    let mut ar = tar::Archive::new(reader);
-    for entry in ar.entries()? {
-        progress.check()?;
-        let mut entry = entry?;
-        let et = entry.header().entry_type();
-        if !(et.is_file() || et.is_dir() || et == tar::EntryType::GNUSparse) {
-            continue;
-        }
-        let path = tar_entry_path(&entry, listing.encoding);
-        if path.is_empty() {
-            continue;
-        }
-        progress.set_current(&path);
-        let size = entry.header().size().unwrap_or(0);
-        let Some(out) = planner.target(&path, et.is_dir()) else {
-            if !et.is_dir() {
-                progress.add(size);
-            }
-            continue;
-        };
-        if et.is_dir() {
-            planner.make_dir(&out)?;
-            continue;
-        }
-        let mtime = entry.header().mtime().ok().and_then(|m| unix_to_naive(m as i64));
-        let mut f = planner.create_file(&out)?;
-        let res = copy_with_progress(&mut entry, &mut f, progress);
-        drop(f);
-        match res {
-            Ok(n) => planner.finish_file(out, n, mtime),
-            Err(err) => {
-                let _ = fs::remove_file(&out);
-                return Err(entry_error(err, &path));
-            }
-        }
-    }
-    Ok(())
-}
-
 fn extract_single(listing: &Listing, planner: &mut Planner<'_>, progress: &Progress) -> Result<()> {
     let Some(e) = listing.entries.first() else { return Ok(()) };
     progress.set_current(&e.path);
     let Some(out) = planner.target(&e.path, false) else { return Ok(()) };
-    let mut d = decompressor(listing.kind, File::open(&listing.path)?);
+    let mut d = listing.kind.filter.reader(File::open(&listing.path)?)?;
     let mut f = planner.create_file(&out)?;
     let res = copy_with_progress(&mut d, &mut f, progress);
     drop(f);
@@ -1043,17 +1115,51 @@ fn extract_single(listing: &Listing, planner: &mut Planner<'_>, progress: &Progr
 // Creating and editing ZIP archives
 // ---------------------------------------------------------------------------
 
+/// A compression algorithm inside a ZIP or 7z archive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Method {
+    Store,
+    Deflate,
+    Bzip2,
+    Lzma,
+    Lzma2,
+    Xz,
+    Zstd,
+    Ppmd,
+    Brotli,
+    Lz4,
+}
+
+impl Method {
+    pub fn label(self) -> &'static str {
+        match self {
+            Method::Store => tr!("저장 (압축 안 함)", "Store (no compression)"),
+            Method::Deflate => "Deflate",
+            Method::Bzip2 => "BZip2",
+            Method::Lzma => "LZMA",
+            Method::Lzma2 => "LZMA2",
+            Method::Xz => "XZ",
+            Method::Zstd => "Zstandard",
+            Method::Ppmd => "PPMd",
+            Method::Brotli => "Brotli",
+            Method::Lz4 => "LZ4",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
-pub struct ZipOptions {
-    /// 0 = store only, 1 = fastest ... 9 = smallest.
+pub struct PackOptions {
+    /// Algorithm for ZIP and 7z; other formats use their filter.
+    pub method: Method,
+    /// 0 = fastest (store for ZIP/7z), 9 = smallest.
     pub level: u8,
-    /// AES-256 password; `None` or empty = no encryption.
+    /// AES-256 password (ZIP, 7z); `None` or empty = no encryption.
     pub password: Option<String>,
 }
 
-impl Default for ZipOptions {
+impl Default for PackOptions {
     fn default() -> Self {
-        Self { level: 6, password: None }
+        Self { method: Method::Deflate, level: 6, password: None }
     }
 }
 
@@ -1115,13 +1221,16 @@ fn file_mtime(p: &Path) -> zip::DateTime {
 fn write_sources<W: Write + Seek>(
     zw: &mut zip::ZipWriter<W>,
     items: &[SourceItem],
-    opts: &ZipOptions,
+    opts: &PackOptions,
     progress: &Progress,
 ) -> Result<()> {
-    let method = if opts.level == 0 {
-        zip::CompressionMethod::Stored
-    } else {
-        zip::CompressionMethod::Deflated
+    let (method, level) = match (opts.level, opts.method) {
+        (0, _) | (_, Method::Store) => (zip::CompressionMethod::Stored, None),
+        (l, Method::Bzip2) => (zip::CompressionMethod::Bzip2, Some(l as i64)),
+        (l, Method::Zstd) => (zip::CompressionMethod::Zstd, Some([1, 1, 2, 3, 5, 7, 9, 12, 15, 19][l.min(9) as usize])),
+        (l, Method::Xz | Method::Lzma | Method::Lzma2) => (zip::CompressionMethod::Xz, Some(l as i64)),
+        (l, Method::Ppmd) => (zip::CompressionMethod::Ppmd, Some(l as i64)),
+        (l, _) => (zip::CompressionMethod::Deflated, Some(l as i64)),
     };
     let password = opts.password.clone().filter(|p| !p.is_empty());
     for item in items {
@@ -1131,8 +1240,8 @@ fn write_sources<W: Write + Seek>(
             .compression_method(method)
             .last_modified_time(file_mtime(&item.disk))
             .large_file(item.size >= 0xFFFF_FFFF);
-        if opts.level > 0 {
-            fo = fo.compression_level(Some(opts.level.min(9) as i64));
+        if let Some(l) = level {
+            fo = fo.compression_level(Some(l.min(19)));
         }
         if item.is_dir {
             zw.add_directory(format!("{}/", item.name), fo)?;
@@ -1160,8 +1269,9 @@ fn temp_beside(dest: &Path) -> Result<tempfile::NamedTempFile> {
         .with_context(|| trf!("임시 파일을 만들 수 없습니다: {}", "Cannot create a temporary file in: {}", dir.display()))
 }
 
-/// Creates a new ZIP archive at `dest` from files and folders.
-pub fn create_zip(dest: &Path, sources: &[PathBuf], opts: &ZipOptions, progress: &Progress) -> Result<usize> {
+/// Creates a new archive of type `kind` at `dest` from files and folders.
+/// Returns the number of files stored.
+pub fn create(dest: &Path, sources: &[PathBuf], kind: ArchiveKind, opts: &PackOptions, progress: &Progress) -> Result<usize> {
     if sources.is_empty() {
         bail!(tr!("압축할 파일을 선택하세요.", "Choose files to compress."));
     }
@@ -1172,10 +1282,16 @@ pub fn create_zip(dest: &Path, sources: &[PathBuf], opts: &ZipOptions, progress:
         .collect();
     progress.set_total(items.iter().map(|i| i.size).sum::<u64>().max(1));
     let tmp = temp_beside(dest)?;
-    {
-        let mut zw = zip::ZipWriter::new(io::BufWriter::new(tmp.as_file()));
-        write_sources(&mut zw, &items, opts, progress)?;
-        zw.finish()?.flush()?;
+    match (kind.container, kind.filter) {
+        (Container::Zip, Filter::None) => {
+            let mut zw = zip::ZipWriter::new(io::BufWriter::new(tmp.as_file()));
+            write_sources(&mut zw, &items, opts, progress)?;
+            zw.finish()?.flush()?;
+        }
+        (Container::SevenZ, Filter::None) => create::sevenz(tmp.as_file(), &items, opts, progress)?,
+        (Container::Tar, f) if f.can_write() => create::tar(tmp.as_file(), &items, f, opts.level, progress)?,
+        (Container::Raw, f) if f != Filter::None && f.can_write() => create::single(tmp.as_file(), &items, f, opts.level, progress)?,
+        _ => return Err(ArchiveError::Unsupported(trf!("{} 형식으로 압축하기", "creating {} archives", kind.label())).into()),
     }
     tmp.persist(dest).map_err(|e| anyhow::Error::new(e.error).context(tr!("압축 파일을 저장할 수 없습니다.", "Cannot save the archive.")))?;
     Ok(items.iter().filter(|i| !i.is_dir).count())
@@ -1187,10 +1303,10 @@ fn rewrite_zip(
     listing: &Listing,
     keep: impl Fn(&Entry) -> bool,
     new_items: &[SourceItem],
-    opts: &ZipOptions,
+    opts: &PackOptions,
     progress: &Progress,
 ) -> Result<()> {
-    if listing.kind != ArchiveKind::Zip {
+    if listing.kind != ArchiveKind::ZIP {
         return Err(ArchiveError::Unsupported(tr!("ZIP 파일만 수정할 수 있습니다", "only ZIP files can be changed").into()).into());
     }
     let mut src = zip::ZipArchive::new(BufReader::new(File::open(&listing.path)?))?;
@@ -1220,7 +1336,7 @@ fn rewrite_zip(
 
 /// Adds files/folders into the folder `base` ("" = root) of an existing ZIP.
 /// Entries with the same name are replaced.
-pub fn add_to_zip(listing: &Listing, sources: &[PathBuf], base: &str, opts: &ZipOptions, progress: &Progress) -> Result<usize> {
+pub fn add_to_zip(listing: &Listing, sources: &[PathBuf], base: &str, opts: &PackOptions, progress: &Progress) -> Result<usize> {
     let items = collect_sources(sources, base)?;
     let new_names: HashSet<String> = items.iter().map(|i| i.name.clone()).collect();
     rewrite_zip(listing, |e| !new_names.contains(&e.path), &items, opts, progress)?;
@@ -1233,7 +1349,7 @@ pub fn delete_from_zip(listing: &Listing, selection: &[String], progress: &Progr
     if removed == 0 {
         bail!(tr!("삭제할 항목이 없습니다.", "Nothing to delete."));
     }
-    rewrite_zip(listing, |e| !is_selected(&e.path, selection), &[], &ZipOptions::default(), progress)?;
+    rewrite_zip(listing, |e| !is_selected(&e.path, selection), &[], &PackOptions::default(), progress)?;
     Ok(removed)
 }
 
@@ -1270,3 +1386,9 @@ pub fn ratio(size: u64, packed: Option<u64>) -> Option<f32> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod formats_tests;
+
+#[cfg(all(test, unix))]
+mod interop;

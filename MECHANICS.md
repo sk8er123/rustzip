@@ -8,15 +8,22 @@ design choice (marked "estimated").
 ## Formats
 | Value | Setting | Source |
 |---|---|---|
-| Open & extract | ZIP, 7Z, TAR, TAR.GZ, TAR.BZ2, TAR.XZ, GZ (also BZ2, XZ) | request |
-| Create | ZIP only | request |
+| Open & extract | ZIP, 7Z, RAR, ALZ, EGG, LZH, ARJ, CAB, ISO, TAR, CPIO, AR; single files and TAR/CPIO/AR inside GZ, BZ2, XZ, LZMA, LZ, ZST, LZ4, BR, SZ, Z | request ("모든 압축 알고리즘") |
+| Create | ZIP, 7Z, TAR, TAR.(GZ/BZ2/XZ/ZST/LZ4/LZMA/LZ/BR/SZ), single-file GZ/BZ2/XZ/ZST/LZ4/LZMA/LZ/BR/SZ | request |
+| Not creatable | RAR (closed format), ALZ/EGG, LZH, ARJ, CAB, ISO, .Z | estimated |
 | Edit (add/delete) | ZIP only | request |
-| Format detection | by file content (magic bytes), extension as fallback | estimated |
+| Format detection | by file content (magic bytes); Brotli and LZMA-alone also need the extension; self-extracting .exe checked for ZIP/RAR | estimated |
+| Model | container (ZIP, 7Z, TAR...) × outer filter (GZ, ZST...) | estimated |
 
-## Compression (new ZIP / add to ZIP)
+## Compression (new archive / add to ZIP)
 | Value | Setting | Source |
 |---|---|---|
-| Compression levels | 0–9 (0 = store, 1–9 = Deflate) | request ("compression level option") |
+| Format menu | ZIP, 7Z, TAR, TAR.*, single-file filters; changing it changes the file name ending | estimated |
+| ZIP methods | Deflate (default), BZip2, XZ, Zstandard, PPMd, 저장 | request |
+| 7Z methods | LZMA2 (default), LZMA, PPMd, BZip2, Deflate, Zstandard, Brotli, LZ4, 저장 | request |
+| 7Z + password | AES-256, file list encrypted too; Brotli not offered with a password (sevenz-rust2 reads past the stream into the AES padding) | estimated |
+| Single-file formats | exactly one file; name is the file's own name plus the ending (`보고서.txt.zst`) | estimated |
+| Compression levels | 0–9 (0 = store/fastest); mapped to each algorithm's own range (zstd 1–19, brotli 0–11) | request ("compression level option") |
 | Default level | 6 ("보통") | estimated |
 | Password encryption | AES-256 (WinZip AE-2) | request |
 | Password confirmation | typed twice when creating | estimated |

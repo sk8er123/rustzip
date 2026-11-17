@@ -1,28 +1,158 @@
 {
   "version": 1,
   "values": [
-    {"name": "open formats", "group": "formats", "value": "ZIP, 7Z, TAR, TAR.GZ, TAR.BZ2, TAR.XZ, GZ, BZ2, XZ", "source": "person's request"},
-    {"name": "create format", "group": "formats", "value": "ZIP", "source": "person's request"},
-    {"name": "editable format", "group": "formats", "value": "ZIP", "source": "person's request"},
-    {"name": "compression level min", "group": "compression", "value": 0, "source": "person's request"},
-    {"name": "compression level max", "group": "compression", "value": 9, "source": "person's request"},
-    {"name": "default compression level", "group": "compression", "value": 6, "estimated": true},
-    {"name": "password encryption", "group": "compression", "value": "AES-256", "source": "person's request"},
-    {"name": "default name encoding", "group": "korean", "value": "auto: UTF-8 flag, UTF-8, CP949, CP437", "source": "person's request"},
-    {"name": "default overwrite rule", "group": "extract", "value": "rename", "estimated": true},
-    {"name": "extract into folder named after archive", "group": "extract", "value": true, "estimated": true},
-    {"name": "skip unsafe paths", "group": "extract", "value": true, "estimated": true},
-    {"name": "window width", "group": "window", "value": 1100, "unit": "px", "estimated": true},
-    {"name": "window height", "group": "window", "value": 700, "unit": "px", "estimated": true},
-    {"name": "file list columns", "group": "window", "value": "이름, 크기, 압축 크기, 압축률, 수정한 날짜", "source": "person's request (압축률 estimated)"},
-    {"name": "progress window delay", "group": "window", "value": 250, "unit": "ms", "estimated": true},
-    {"name": "drag and drop", "group": "controls", "value": true, "source": "person's request"},
-    {"name": "open archive from command line", "group": "controls", "value": true, "source": "person's request"},
-    {"name": "open shortcut", "group": "controls", "value": "Ctrl+O", "estimated": true},
-    {"name": "new archive shortcut", "group": "controls", "value": "Ctrl+N", "estimated": true},
-    {"name": "extract shortcut", "group": "controls", "value": "Ctrl+E", "estimated": true},
-    {"name": "delete shortcut", "group": "controls", "value": "Delete", "estimated": true},
-    {"name": "parent folder shortcut", "group": "controls", "value": "Backspace", "estimated": true},
-    {"name": "ui language", "group": "window", "value": "Korean", "source": "person's request"}
+    {
+      "name": "open formats",
+      "group": "formats",
+      "value": "ZIP, 7Z, RAR, ALZ, EGG, LZH, ARJ, CAB, ISO, TAR, CPIO, AR; GZ, BZ2, XZ, LZMA, LZ, ZST, LZ4, BR, SZ, Z (alone or around TAR/CPIO/AR)",
+      "source": "person's request (all compression algorithms)"
+    },
+    {
+      "name": "create format",
+      "group": "formats",
+      "value": "ZIP, 7Z, TAR, TAR.GZ/BZ2/XZ/ZST/LZ4/LZMA/LZ/BR/SZ, single-file GZ/BZ2/XZ/ZST/LZ4/LZMA/LZ/BR/SZ",
+      "source": "person's request (all compression algorithms)"
+    },
+    {
+      "name": "zip methods",
+      "group": "compression",
+      "value": "Deflate, BZip2, XZ, Zstandard, PPMd, Store",
+      "source": "person's request"
+    },
+    {
+      "name": "7z methods",
+      "group": "compression",
+      "value": "LZMA2, LZMA, PPMd, BZip2, Deflate, Zstandard, Brotli, LZ4, Store",
+      "source": "person's request"
+    },
+    {
+      "name": "editable format",
+      "group": "formats",
+      "value": "ZIP",
+      "source": "person's request"
+    },
+    {
+      "name": "compression level min",
+      "group": "compression",
+      "value": 0,
+      "source": "person's request"
+    },
+    {
+      "name": "compression level max",
+      "group": "compression",
+      "value": 9,
+      "source": "person's request"
+    },
+    {
+      "name": "default compression level",
+      "group": "compression",
+      "value": 6,
+      "estimated": true
+    },
+    {
+      "name": "password encryption",
+      "group": "compression",
+      "value": "AES-256",
+      "source": "person's request"
+    },
+    {
+      "name": "default name encoding",
+      "group": "korean",
+      "value": "auto: UTF-8 flag, UTF-8, CP949, CP437",
+      "source": "person's request"
+    },
+    {
+      "name": "default overwrite rule",
+      "group": "extract",
+      "value": "rename",
+      "estimated": true
+    },
+    {
+      "name": "extract into folder named after archive",
+      "group": "extract",
+      "value": true,
+      "estimated": true
+    },
+    {
+      "name": "skip unsafe paths",
+      "group": "extract",
+      "value": true,
+      "estimated": true
+    },
+    {
+      "name": "window width",
+      "group": "window",
+      "value": 1100,
+      "unit": "px",
+      "estimated": true
+    },
+    {
+      "name": "window height",
+      "group": "window",
+      "value": 700,
+      "unit": "px",
+      "estimated": true
+    },
+    {
+      "name": "file list columns",
+      "group": "window",
+      "value": "이름, 크기, 압축 크기, 압축률, 수정한 날짜",
+      "source": "person's request (압축률 estimated)"
+    },
+    {
+      "name": "progress window delay",
+      "group": "window",
+      "value": 250,
+      "unit": "ms",
+      "estimated": true
+    },
+    {
+      "name": "drag and drop",
+      "group": "controls",
+      "value": true,
+      "source": "person's request"
+    },
+    {
+      "name": "open archive from command line",
+      "group": "controls",
+      "value": true,
+      "source": "person's request"
+    },
+    {
+      "name": "open shortcut",
+      "group": "controls",
+      "value": "Ctrl+O",
+      "estimated": true
+    },
+    {
+      "name": "new archive shortcut",
+      "group": "controls",
+      "value": "Ctrl+N",
+      "estimated": true
+    },
+    {
+      "name": "extract shortcut",
+      "group": "controls",
+      "value": "Ctrl+E",
+      "estimated": true
+    },
+    {
+      "name": "delete shortcut",
+      "group": "controls",
+      "value": "Delete",
+      "estimated": true
+    },
+    {
+      "name": "parent folder shortcut",
+      "group": "controls",
+      "value": "Backspace",
+      "estimated": true
+    },
+    {
+      "name": "ui language",
+      "group": "window",
+      "value": "Korean",
+      "source": "person's request"
+    }
   ]
 }
