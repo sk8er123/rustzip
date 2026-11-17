@@ -517,3 +517,49 @@ fn unknown_files_are_rejected_and_sizes_format() {
     assert_eq!(format_size(5 * 1024 * 1024), "5.0 MB");
     assert_eq!(ratio(200, Some(50)), Some(25.0));
 }
+
+/// Damaged archives give messages in the interface language, not the
+/// libraries' English ("failed to fill whole buffer", "Invalid checksum").
+#[test]
+fn damaged_archive_errors_are_translated() {
+    use crate::i18n::{describe_error, with_lang, Lang};
+    let t = tmp();
+    let src = make_tree(t.path());
+
+    // A .tar.xz cut off part way.
+    let xz_path = t.path().join("cut.tar.xz");
+    let mut xz = lzma_rust2::XzWriter::new(Vec::new(), lzma_rust2::XzOptions::with_preset(6)).unwrap();
+    xz.write_all(&make_tar_bytes(&src)).unwrap();
+    let full = xz.finish().unwrap();
+    fs::write(&xz_path, &full[..full.len() / 2]).unwrap();
+
+    // A ZIP whose stored data was changed after it was written.
+    let zip_path = t.path().join("flipped.zip");
+    create_zip(&zip_path, &[src.join("hello.txt")], &ZipOptions { level: 0, password: None }, &p()).unwrap();
+    let mut b = fs::read(&zip_path).unwrap();
+    for x in &mut b[100..140] {
+        *x ^= 0xFF;
+    }
+    fs::write(&zip_path, b).unwrap();
+
+    let messages = |lang| {
+        with_lang(lang, || {
+            let cut = list(&xz_path, NameEncoding::Auto, &p()).map(|_| ()).unwrap_err();
+            let flipped = list(&zip_path, NameEncoding::Auto, &p())
+                .and_then(|l| extract_all(&l, &t.path().join("out"), None))
+                .map(|_| ())
+                .unwrap_err();
+            (describe_error(&cut), describe_error(&flipped))
+        })
+    };
+
+    let (cut, flipped) = messages(Lang::Ko);
+    // (Half an xz stream may be detected as plain XZ, so the format name is not checked.)
+    assert!(cut.ends_with(" 파일의 목록을 읽을 수 없습니다.\n파일이 중간에 끊겨 있습니다. 내려받기가 덜 되었거나 손상된 파일입니다."), "{cut}");
+    assert_eq!(flipped, "'hello.txt' 항목을 풀 수 없습니다.\n데이터가 손상되었습니다. 검사값이 맞지 않거나 형식이 올바르지 않습니다.");
+
+    let (cut, flipped) = messages(Lang::En);
+    assert!(cut.starts_with("Cannot read the contents of the "), "{cut}");
+    assert!(cut.ends_with(" file.\nThe file ends too early. It was not fully downloaded or is damaged."), "{cut}");
+    assert_eq!(flipped, "Could not extract 'hello.txt'.\nThe data is damaged: a checksum does not match or the format is invalid.");
+}

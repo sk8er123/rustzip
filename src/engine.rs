@@ -32,10 +32,10 @@ pub enum ArchiveError {
 impl fmt::Display for ArchiveError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ArchiveError::PasswordRequired => write!(f, "암호가 필요합니다."),
-            ArchiveError::WrongPassword => write!(f, "암호가 올바르지 않습니다."),
-            ArchiveError::Cancelled => write!(f, "작업을 취소했습니다."),
-            ArchiveError::Unsupported(s) => write!(f, "지원하지 않는 작업입니다: {s}"),
+            ArchiveError::PasswordRequired => f.write_str(tr!("암호가 필요합니다.", "A password is required.")),
+            ArchiveError::WrongPassword => f.write_str(tr!("암호가 올바르지 않습니다.", "The password is incorrect.")),
+            ArchiveError::Cancelled => f.write_str(tr!("작업을 취소했습니다.", "The operation was cancelled.")),
+            ArchiveError::Unsupported(s) => f.write_str(&trf!("지원하지 않는 작업입니다: {s}", "Not supported: {s}")),
         }
     }
 }
@@ -45,6 +45,21 @@ impl std::error::Error for ArchiveError {}
 /// Returns the special error inside an anyhow error, if any.
 pub fn archive_error(err: &anyhow::Error) -> Option<&ArchiveError> {
     err.downcast_ref::<ArchiveError>()
+}
+
+/// Adds a leading explanation to a library error; password and cancel errors
+/// already say everything and are passed through unchanged.
+fn with_note(err: anyhow::Error, note: impl FnOnce() -> String) -> anyhow::Error {
+    if archive_error(&err).is_some() {
+        err
+    } else {
+        err.context(note())
+    }
+}
+
+/// Names the archive entry that failed to extract.
+fn entry_error(err: anyhow::Error, path: &str) -> anyhow::Error {
+    with_note(err, || trf!("'{path}' 항목을 풀 수 없습니다.", "Could not extract '{path}'."))
 }
 
 // ---------------------------------------------------------------------------
@@ -196,10 +211,10 @@ impl NameEncoding {
     ];
     pub fn label(self) -> &'static str {
         match self {
-            NameEncoding::Auto => "자동 감지",
-            NameEncoding::Utf8 => "유니코드 (UTF-8)",
-            NameEncoding::Cp949 => "한국어 (CP949/EUC-KR)",
-            NameEncoding::Cp437 => "서유럽 (CP437)",
+            NameEncoding::Auto => tr!("자동 감지", "Auto-detect"),
+            NameEncoding::Utf8 => tr!("유니코드 (UTF-8)", "Unicode (UTF-8)"),
+            NameEncoding::Cp949 => tr!("한국어 (CP949/EUC-KR)", "Korean (CP949/EUC-KR)"),
+            NameEncoding::Cp437 => tr!("서유럽 (CP437)", "Western (CP437)"),
         }
     }
 }
@@ -329,7 +344,7 @@ fn decompressor(kind: ArchiveKind, file: File) -> Box<dyn Read> {
 
 /// Works out the archive type from the file's first bytes (falling back to the extension).
 pub fn detect_kind(path: &Path) -> Result<ArchiveKind> {
-    let mut f = File::open(path).with_context(|| format!("파일을 열 수 없습니다: {}", path.display()))?;
+    let mut f = File::open(path).with_context(|| trf!("파일을 열 수 없습니다: {}", "Cannot open the file: {}", path.display()))?;
     let head = read_up_to(&mut f, 512);
     let lower = path.to_string_lossy().to_lowercase();
     let kind = if head.starts_with(b"PK\x03\x04") || head.starts_with(b"PK\x05\x06") || head.starts_with(b"PK\x07\x08") {
@@ -358,7 +373,7 @@ pub fn detect_kind(path: &Path) -> Result<ArchiveKind> {
     } else if lower.ends_with(".tar") {
         ArchiveKind::Tar
     } else {
-        bail!("지원하지 않는 압축 형식이거나 손상된 파일입니다.");
+        bail!(tr!("지원하지 않는 압축 형식이거나 손상된 파일입니다.", "Unsupported archive format, or the file is damaged."));
     };
     Ok(kind)
 }
@@ -451,17 +466,17 @@ pub fn list_with_password(path: &Path, encoding: NameEncoding, password: Option<
     let kind = detect_kind(path)?;
     let archive_size = fs::metadata(path)?.len();
     let entries = match kind {
-        ArchiveKind::Zip => list_zip(path, encoding)?,
-        ArchiveKind::SevenZ => list_7z(path, password)?,
-        k if k.is_tar() => list_tar(path, k, encoding, progress)?,
-        k => list_single(path, k, progress)?,
-    };
+        ArchiveKind::Zip => list_zip(path, encoding),
+        ArchiveKind::SevenZ => list_7z(path, password),
+        k if k.is_tar() => list_tar(path, k, encoding, progress),
+        k => list_single(path, k, progress),
+    }
+    .map_err(|e| with_note(e, || trf!("{} 파일의 목록을 읽을 수 없습니다.", "Cannot read the contents of the {} file.", kind.label())))?;
     Ok(Listing { path: path.to_path_buf(), kind, entries, encoding, archive_size })
 }
 
 fn list_zip(path: &Path, encoding: NameEncoding) -> Result<Vec<Entry>> {
-    let archive = zip::ZipArchive::new(BufReader::new(File::open(path)?))
-        .context("ZIP 파일을 읽을 수 없습니다.")?;
+    let archive = zip::ZipArchive::new(BufReader::new(File::open(path)?))?;
     let mut out = Vec::with_capacity(archive.len());
     for i in 0..archive.len() {
         let e = archive.by_index_data(i)?;
@@ -491,7 +506,7 @@ fn sevenz_err(e: sevenz_rust2::Error) -> anyhow::Error {
     match e {
         sevenz_rust2::Error::PasswordRequired => ArchiveError::PasswordRequired.into(),
         sevenz_rust2::Error::MaybeBadPassword(_) => ArchiveError::WrongPassword.into(),
-        other => anyhow!("7z 오류: {other}"),
+        other => anyhow::Error::new(other),
     }
 }
 
@@ -548,7 +563,7 @@ fn list_tar(path: &Path, kind: ArchiveKind, encoding: NameEncoding, progress: &P
     };
     let mut ar = tar::Archive::new(reader);
     let mut out = Vec::new();
-    for (i, entry) in ar.entries().context("TAR 파일을 읽을 수 없습니다.")?.enumerate() {
+    for (i, entry) in ar.entries()?.enumerate() {
         progress.check()?;
         let entry = entry.map_err(|e| if progress.cancelled() { ArchiveError::Cancelled.into() } else { anyhow!(e) })?;
         let et = entry.header().entry_type();
@@ -824,7 +839,7 @@ impl Planner<'_> {
     }
 
     fn make_dir(&mut self, p: &Path) -> Result<()> {
-        fs::create_dir_all(p).with_context(|| format!("폴더를 만들 수 없습니다: {}", p.display()))?;
+        fs::create_dir_all(p).with_context(|| trf!("폴더를 만들 수 없습니다: {}", "Cannot create the folder: {}", p.display()))?;
         self.report.dirs += 1;
         Ok(())
     }
@@ -833,7 +848,7 @@ impl Planner<'_> {
         if let Some(parent) = p.parent() {
             fs::create_dir_all(parent)?;
         }
-        File::create(p).with_context(|| format!("파일을 만들 수 없습니다: {}", p.display()))
+        File::create(p).with_context(|| trf!("파일을 만들 수 없습니다: {}", "Cannot create the file: {}", p.display()))
     }
 
     fn finish_file(&mut self, p: PathBuf, bytes: u64, mtime: Option<NaiveDateTime>) {
@@ -850,7 +865,7 @@ impl Planner<'_> {
 
 pub fn extract(listing: &Listing, opts: &ExtractOptions, progress: &Progress) -> Result<ExtractReport> {
     fs::create_dir_all(&opts.dest)
-        .with_context(|| format!("대상 폴더를 만들 수 없습니다: {}", opts.dest.display()))?;
+        .with_context(|| trf!("대상 폴더를 만들 수 없습니다: {}", "Cannot create the destination folder: {}", opts.dest.display()))?;
     let selected = |e: &Entry| opts.selection.as_ref().is_none_or(|s| is_selected(&e.path, s));
     let total: u64 = listing.entries.iter().filter(|e| selected(e) && !e.is_dir).map(|e| e.size).sum();
     progress.set_total(total.max(1));
@@ -893,7 +908,7 @@ fn extract_zip(listing: &Listing, planner: &mut Planner<'_>, progress: &Progress
         }
         .map_err(|err| match err {
             zip::result::ZipError::InvalidPassword => ArchiveError::WrongPassword.into(),
-            other => anyhow!("'{}' 항목을 읽을 수 없습니다: {other}", e.path),
+            other => entry_error(other.into(), &e.path),
         })?;
         let mut f = planner.create_file(&out)?;
         let res = copy_with_progress(&mut zf, &mut f, progress);
@@ -906,7 +921,7 @@ fn extract_zip(listing: &Listing, planner: &mut Planner<'_>, progress: &Progress
                     // AES authentication / CRC failure after a password that passed the quick check.
                     return Err(ArchiveError::WrongPassword.into());
                 }
-                return Err(err);
+                return Err(entry_error(err, &e.path));
             }
         }
     }
@@ -951,7 +966,7 @@ fn extract_7z(listing: &Listing, planner: &mut Planner<'_>, progress: &Progress)
             Ok(()) => Ok(EntryDecision::Continue),
             Err(e) => {
                 let _ = fs::remove_file(&out);
-                inner_err = Some(e);
+                inner_err = Some(entry_error(e, &path));
                 Ok(EntryDecision::Stop)
             }
         }
@@ -991,9 +1006,15 @@ fn extract_tar(listing: &Listing, planner: &mut Planner<'_>, progress: &Progress
         }
         let mtime = entry.header().mtime().ok().and_then(|m| unix_to_naive(m as i64));
         let mut f = planner.create_file(&out)?;
-        let n = copy_with_progress(&mut entry, &mut f, progress)?;
+        let res = copy_with_progress(&mut entry, &mut f, progress);
         drop(f);
-        planner.finish_file(out, n, mtime);
+        match res {
+            Ok(n) => planner.finish_file(out, n, mtime),
+            Err(err) => {
+                let _ = fs::remove_file(&out);
+                return Err(entry_error(err, &path));
+            }
+        }
     }
     Ok(())
 }
@@ -1013,7 +1034,7 @@ fn extract_single(listing: &Listing, planner: &mut Planner<'_>, progress: &Progr
         }
         Err(err) => {
             let _ = fs::remove_file(&out);
-            Err(err)
+            Err(entry_error(err, &e.path))
         }
     }
 }
@@ -1048,11 +1069,11 @@ struct SourceItem {
 fn collect_sources(sources: &[PathBuf], base: &str) -> Result<Vec<SourceItem>> {
     let mut out = Vec::new();
     for src in sources {
-        let meta = fs::metadata(src).with_context(|| format!("찾을 수 없습니다: {}", src.display()))?;
+        let meta = fs::metadata(src).with_context(|| trf!("찾을 수 없습니다: {}", "Not found: {}", src.display()))?;
         let fname = src
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
-            .ok_or_else(|| anyhow!("잘못된 경로: {}", src.display()))?;
+            .ok_or_else(|| anyhow!(trf!("잘못된 경로: {}", "Invalid path: {}", src.display())))?;
         let name = if base.is_empty() { fname } else { format!("{base}/{fname}") };
         if meta.is_dir() {
             walk_dir(src, &name, &mut out)?;
@@ -1124,7 +1145,7 @@ fn write_sources<W: Write + Seek>(
             }
             None => zw.start_file(item.name.as_str(), fo)?,
         }
-        let mut f = File::open(&item.disk).with_context(|| format!("읽을 수 없습니다: {}", item.disk.display()))?;
+        let mut f = File::open(&item.disk).with_context(|| trf!("읽을 수 없습니다: {}", "Cannot read: {}", item.disk.display()))?;
         copy_with_progress(&mut f, zw, progress)?;
     }
     Ok(())
@@ -1136,13 +1157,13 @@ fn temp_beside(dest: &Path) -> Result<tempfile::NamedTempFile> {
         .prefix(".rustzip-")
         .suffix(".tmp")
         .tempfile_in(dir)
-        .with_context(|| format!("임시 파일을 만들 수 없습니다: {}", dir.display()))
+        .with_context(|| trf!("임시 파일을 만들 수 없습니다: {}", "Cannot create a temporary file in: {}", dir.display()))
 }
 
 /// Creates a new ZIP archive at `dest` from files and folders.
 pub fn create_zip(dest: &Path, sources: &[PathBuf], opts: &ZipOptions, progress: &Progress) -> Result<usize> {
     if sources.is_empty() {
-        bail!("압축할 파일을 선택하세요.");
+        bail!(tr!("압축할 파일을 선택하세요.", "Choose files to compress."));
     }
     let dest_abs = dest.canonicalize().unwrap_or_else(|_| dest.to_path_buf());
     let items: Vec<SourceItem> = collect_sources(sources, "")?
@@ -1156,7 +1177,7 @@ pub fn create_zip(dest: &Path, sources: &[PathBuf], opts: &ZipOptions, progress:
         write_sources(&mut zw, &items, opts, progress)?;
         zw.finish()?.flush()?;
     }
-    tmp.persist(dest).map_err(|e| anyhow!("압축 파일을 저장할 수 없습니다: {}", e.error))?;
+    tmp.persist(dest).map_err(|e| anyhow::Error::new(e.error).context(tr!("압축 파일을 저장할 수 없습니다.", "Cannot save the archive.")))?;
     Ok(items.iter().filter(|i| !i.is_dir).count())
 }
 
@@ -1170,7 +1191,7 @@ fn rewrite_zip(
     progress: &Progress,
 ) -> Result<()> {
     if listing.kind != ArchiveKind::Zip {
-        return Err(ArchiveError::Unsupported("ZIP 파일만 수정할 수 있습니다".into()).into());
+        return Err(ArchiveError::Unsupported(tr!("ZIP 파일만 수정할 수 있습니다", "only ZIP files can be changed").into()).into());
     }
     let mut src = zip::ZipArchive::new(BufReader::new(File::open(&listing.path)?))?;
     let kept: HashSet<usize> = listing.entries.iter().filter(|e| keep(e)).map(|e| e.index).collect();
@@ -1193,7 +1214,7 @@ fn rewrite_zip(
         write_sources(&mut zw, new_items, opts, progress)?;
         zw.finish()?.flush()?;
     }
-    tmp.persist(&listing.path).map_err(|e| anyhow!("압축 파일을 저장할 수 없습니다: {}", e.error))?;
+    tmp.persist(&listing.path).map_err(|e| anyhow::Error::new(e.error).context(tr!("압축 파일을 저장할 수 없습니다.", "Cannot save the archive.")))?;
     Ok(())
 }
 
@@ -1210,7 +1231,7 @@ pub fn add_to_zip(listing: &Listing, sources: &[PathBuf], base: &str, opts: &Zip
 pub fn delete_from_zip(listing: &Listing, selection: &[String], progress: &Progress) -> Result<usize> {
     let removed = listing.entries.iter().filter(|e| is_selected(&e.path, selection)).count();
     if removed == 0 {
-        bail!("삭제할 항목이 없습니다.");
+        bail!(tr!("삭제할 항목이 없습니다.", "Nothing to delete."));
     }
     rewrite_zip(listing, |e| !is_selected(&e.path, selection), &[], &ZipOptions::default(), progress)?;
     Ok(removed)

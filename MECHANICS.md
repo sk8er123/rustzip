@@ -52,4 +52,7 @@ design choice (marked "estimated").
 | Drag and drop | one archive → open it; other files → new ZIP, or add to the open ZIP | request |
 | Command line | first argument is opened at start | request |
 | Progress window | appears when a job runs longer than 250 ms, with 취소 | request (delay estimated) |
-| Language | Korean UI text | request |
+| Language | 한국어, English — 보기 › 언어 / Language 메뉴에서 바꾸면 바로 적용되고 저장됨 | request |
+| Starting language | `--lang ko\|en` → saved choice → OS language (Korean if the OS is Korean, otherwise English) | estimated |
+| Saved in | Windows `%APPDATA%\RustZip\settings.txt`, macOS `~/Library/Application Support/RustZip/settings.txt`, Linux `~/.config/rustzip/settings.txt` | estimated |
+| Library error messages | recognised by type (file system, ZIP, 7z) and shown in the current language; unknown ones keep their original text after a translated lead-in | request |

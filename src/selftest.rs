@@ -185,7 +185,7 @@ fn run_stage(app: &mut RustZipApp, ctx: &egui::Context, st: &mut SelfTest) {
         }
         4 => {
             let h = &app.hud;
-            let want = ["이름", "크기", "압축 크기", "수정한 날짜"];
+            let want = [tr!("이름", "Name"), tr!("크기", "Size"), tr!("압축 크기", "Packed"), tr!("수정한 날짜", "Modified")];
             let cols_ok = want.iter().all(|w| h.columns.contains(w));
             let ok = cols_ok && h.toolbar && h.status && h.tree && h.path_bar && h.rows > 0;
             st.step(

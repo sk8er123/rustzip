@@ -17,6 +17,7 @@ open = "5.4.5"
 png = "0.18.1"
 serde_json = "1.0.154"
 sevenz-rust2 = "0.25.0"
+sys-locale = "0.3.2"
 tar = "0.4.46"
 tempfile = "3.27.0"
 zip = { version = "9.6.0", default-features = false, features = ["deflate", "aes-crypto", "chrono", "bzip2"] }

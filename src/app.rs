@@ -34,12 +34,12 @@ pub enum AfterExtract {
 impl JobKind {
     pub fn title(&self) -> &'static str {
         match self {
-            JobKind::Open { .. } => "압축 파일 여는 중",
-            JobKind::Extract { then: AfterExtract::OpenFile(_), .. } => "파일 여는 중",
-            JobKind::Extract { .. } => "압축 푸는 중",
-            JobKind::Create { .. } => "압축하는 중",
-            JobKind::Add { .. } => "파일 추가하는 중",
-            JobKind::Delete { .. } => "파일 삭제하는 중",
+            JobKind::Open { .. } => tr!("압축 파일 여는 중", "Opening archive"),
+            JobKind::Extract { then: AfterExtract::OpenFile(_), .. } => tr!("파일 여는 중", "Opening file"),
+            JobKind::Extract { .. } => tr!("압축 푸는 중", "Extracting"),
+            JobKind::Create { .. } => tr!("압축하는 중", "Compressing"),
+            JobKind::Add { .. } => tr!("파일 추가하는 중", "Adding files"),
+            JobKind::Delete { .. } => tr!("파일 삭제하는 중", "Deleting files"),
         }
     }
     pub fn set_password(&mut self, pw: String) {
@@ -83,12 +83,12 @@ fn run_job(kind: JobKind, progress: &Progress) -> anyhow::Result<JobOutcome> {
         JobKind::Add { listing, sources, base, opts } => {
             let n = engine::add_to_zip(&listing, &sources, &base, &opts, progress)?;
             let l = engine::list(&listing.path, listing.encoding, &Progress::default())?;
-            Ok(JobOutcome::Modified(l, format!("파일 {n}개를 추가했습니다.")))
+            Ok(JobOutcome::Modified(l, trf!("파일 {n}개를 추가했습니다.", "Added {n} file(s).")))
         }
         JobKind::Delete { listing, selection } => {
             let n = engine::delete_from_zip(&listing, &selection, progress)?;
             let l = engine::list(&listing.path, listing.encoding, &Progress::default())?;
-            Ok(JobOutcome::Modified(l, format!("항목 {n}개를 삭제했습니다.")))
+            Ok(JobOutcome::Modified(l, trf!("항목 {n}개를 삭제했습니다.", "Deleted {n} item(s).")))
         }
     }
 }
@@ -158,6 +158,7 @@ pub enum Action {
     Up,
     OpenEntry(String),
     SetEncoding(NameEncoding),
+    SetLanguage(crate::i18n::Lang),
     Start(JobKind),
     Dropped(Vec<PathBuf>),
     About,
@@ -222,7 +223,7 @@ impl RustZipApp {
             job: None,
             dialog: None,
             picker: None,
-            status: "준비".into(),
+            status: tr!("준비", "Ready").into(),
             actions: Vec::new(),
             hud: HudSeen::default(),
             known_password: None,
@@ -276,16 +277,32 @@ impl RustZipApp {
         } else if !self.cur_dir.is_empty() && !self.folders.contains(&self.cur_dir) {
             self.cur_dir.clear();
         }
-        self.status = format!(
-            "{} 열림 — {} 형식, 파일 {}개, 원래 크기 {}",
-            l.path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default(),
-            l.kind.label(),
-            l.file_count(),
-            engine::format_size(l.total_size())
-        );
         self.listing = Some(Arc::new(l));
+        self.status = self.idle_status();
         self.selected.clear();
         self.refresh_view();
+    }
+
+    /// Status bar text when nothing is running: what is open, or "Ready".
+    pub fn idle_status(&self) -> String {
+        let Some(l) = &self.listing else { return tr!("준비", "Ready").into() };
+        let name = l.path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let (kind, files, size) = (l.kind.label(), l.file_count(), engine::format_size(l.total_size()));
+        trf!(
+            "{name} 열림 — {kind} 형식, 파일 {files}개, 원래 크기 {size}",
+            "{name} open — {kind} format, {files} file(s), {size} uncompressed"
+        )
+    }
+
+    /// Switches the interface language and remembers the choice for next time.
+    pub fn set_language(&mut self, lang: crate::i18n::Lang) {
+        crate::i18n::set_lang(lang);
+        if !self.quiet {
+            let _ = crate::i18n::save_lang(lang);
+        }
+        if !self.busy() {
+            self.status = self.idle_status();
+        }
     }
 
     pub fn refresh_view(&mut self) {
@@ -392,13 +409,13 @@ impl RustZipApp {
             Some(first) => {
                 let parent = first.parent().map(Path::to_path_buf).unwrap_or_default();
                 let base = if sources.len() == 1 {
-                    first.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "새 압축 파일".into())
+                    first.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| tr!("새 압축 파일", "New archive").into())
                 } else {
-                    parent.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "새 압축 파일".into())
+                    parent.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| tr!("새 압축 파일", "New archive").into())
                 };
                 parent.join(format!("{base}.zip")).display().to_string()
             }
-            None => crate::picker::home_dir().join("새 압축 파일.zip").display().to_string(),
+            None => crate::picker::home_dir().join(format!("{}.zip", tr!("새 압축 파일", "New archive"))).display().to_string(),
         };
         CreateDlg { sources, dest, level: 6, use_password: false, password: String::new(), password2: String::new(), show_password: false, error: None }
     }
@@ -406,12 +423,12 @@ impl RustZipApp {
     /// Validates the create dialog and returns the job (same path as pressing 압축 시작).
     pub fn create_job_from(dlg: &mut CreateDlg) -> Option<JobKind> {
         if dlg.sources.is_empty() {
-            dlg.error = Some("압축할 파일이나 폴더를 추가하세요.".into());
+            dlg.error = Some(tr!("압축할 파일이나 폴더를 추가하세요.", "Add files or folders to compress.").into());
             return None;
         }
         let mut dest = PathBuf::from(dlg.dest.trim());
         if dest.as_os_str().is_empty() {
-            dlg.error = Some("저장할 압축 파일 이름을 입력하세요.".into());
+            dlg.error = Some(tr!("저장할 압축 파일 이름을 입력하세요.", "Enter a name for the new archive.").into());
             return None;
         }
         if dest.extension().is_none() {
@@ -419,11 +436,11 @@ impl RustZipApp {
         }
         if dlg.use_password {
             if dlg.password.is_empty() {
-                dlg.error = Some("암호를 입력하세요.".into());
+                dlg.error = Some(tr!("암호를 입력하세요.", "Enter a password.").into());
                 return None;
             }
             if dlg.password != dlg.password2 {
-                dlg.error = Some("두 암호가 서로 다릅니다.".into());
+                dlg.error = Some(tr!("두 암호가 서로 다릅니다.", "The two passwords do not match.").into());
                 return None;
             }
         }
@@ -439,7 +456,7 @@ impl RustZipApp {
         let res = match job.rx.try_recv() {
             Ok(r) => r,
             Err(mpsc::TryRecvError::Empty) => return,
-            Err(mpsc::TryRecvError::Disconnected) => Err(anyhow::anyhow!("작업이 비정상적으로 끝났습니다.")),
+            Err(mpsc::TryRecvError::Disconnected) => Err(anyhow::anyhow!(tr!("작업이 비정상적으로 끝났습니다.", "The operation stopped unexpectedly."))),
         };
         let job = self.job.take().expect("job");
         let elapsed = job.started.elapsed().as_secs_f32();
@@ -459,31 +476,30 @@ impl RustZipApp {
                 match then {
                     AfterExtract::OpenFile(p) => {
                         let target = rep.written.first().cloned().unwrap_or(p);
-                        self.status = format!("파일을 열었습니다: {}", target.display());
+                        self.status = trf!("파일을 열었습니다: {}", "Opened: {}", target.display());
                         if !self.quiet {
                             let _ = open::that_detached(&target);
                         }
                     }
                     other => {
-                        let mut text = format!(
-                            "파일 {}개 ({})를 풀었습니다.\n위치: {}\n걸린 시간: {:.1}초",
-                            rep.files,
-                            engine::format_size(rep.bytes),
-                            dest.display(),
-                            elapsed
+                        let (files, size, place) = (rep.files, engine::format_size(rep.bytes), dest.display());
+                        let mut text = trf!(
+                            "파일 {files}개 ({size})를 풀었습니다.\n위치: {place}\n걸린 시간: {elapsed:.1}초",
+                            "Extracted {files} file(s) ({size}).\nLocation: {place}\nTime: {elapsed:.1} s"
                         );
-                        if rep.skipped_existing > 0 {
-                            text.push_str(&format!("\n이미 있는 파일 {}개는 건너뛰었습니다.", rep.skipped_existing));
+                        let (existing, unsafe_paths) = (rep.skipped_existing, rep.skipped_unsafe);
+                        if existing > 0 {
+                            text.push_str(&trf!("\n이미 있는 파일 {existing}개는 건너뛰었습니다.", "\nSkipped {existing} file(s) that already existed."));
                         }
-                        if rep.skipped_unsafe > 0 {
-                            text.push_str(&format!("\n안전하지 않은 경로 {}개는 풀지 않았습니다.", rep.skipped_unsafe));
+                        if unsafe_paths > 0 {
+                            text.push_str(&trf!("\n안전하지 않은 경로 {unsafe_paths}개는 풀지 않았습니다.", "\nDid not extract {unsafe_paths} item(s) with unsafe paths."));
                         }
-                        self.status = format!("압축 풀기 완료 — 파일 {}개", rep.files);
+                        self.status = trf!("압축 풀기 완료 — 파일 {files}개", "Extraction complete — {files} file(s)");
                         if other == AfterExtract::OpenFolder && !self.quiet {
                             let _ = open::that_detached(&dest);
                         }
                         if !self.quiet {
-                            self.dialog = Some(Dialog::Message { title: "압축 풀기 완료".into(), text, error: false });
+                            self.dialog = Some(Dialog::Message { title: tr!("압축 풀기 완료", "Extraction complete").into(), text, error: false });
                         }
                     }
                 }
@@ -498,7 +514,10 @@ impl RustZipApp {
                     self.known_password = opts.password.clone();
                 }
                 self.set_listing(l);
-                self.status = format!("압축 완료 — 파일 {n}개를 {name}에 담았습니다. ({elapsed:.1}초)");
+                self.status = trf!(
+                    "압축 완료 — 파일 {n}개를 {name}에 담았습니다. ({elapsed:.1}초)",
+                    "Compression complete — {n} file(s) saved to {name} ({elapsed:.1} s)"
+                );
             }
             Ok(JobOutcome::Modified(l, msg)) => {
                 self.set_listing(l);
@@ -510,13 +529,15 @@ impl RustZipApp {
                     self.status = e.to_string();
                     self.dialog = Some(Dialog::Password { job: job.kind, text: String::new(), wrong });
                 }
-                Some(ArchiveError::Cancelled) => self.status = "작업을 취소했습니다.".into(),
+                Some(ArchiveError::Cancelled) => self.status = ArchiveError::Cancelled.to_string(),
                 _ => {
-                    self.status = format!("오류: {e}");
+                    let text = crate::i18n::describe_error(&e);
+                    let first = text.lines().next().unwrap_or_default();
+                    self.status = trf!("오류: {first}", "Error: {first}");
                     if let Some(st) = &mut self.selftest {
                         st.errors.push(format!("{e:#}"));
                     }
-                    self.dialog = Some(Dialog::Message { title: "오류".into(), text: format!("{e:#}"), error: true });
+                    self.dialog = Some(Dialog::Message { title: tr!("오류", "Error").into(), text, error: true });
                 }
             },
         }
@@ -544,7 +565,7 @@ impl RustZipApp {
                 self.view.clear();
                 self.selected.clear();
                 self.cur_dir.clear();
-                self.status = "준비".into();
+                self.status = self.idle_status();
             }
             Action::NewArchive(v) => {
                 if v.is_empty() {
@@ -602,6 +623,7 @@ impl RustZipApp {
                     self.encoding = enc;
                 }
             }
+            Action::SetLanguage(lang) => self.set_language(lang),
             Action::Start(job) => self.start_job(job),
             Action::Dropped(paths) => {
                 if paths.len() == 1 && engine::is_archive_file(&paths[0]) {

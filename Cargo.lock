@@ -3186,6 +3186,7 @@ dependencies = [
  "png",
  "serde_json",
  "sevenz-rust2",
+ "sys-locale",
  "tar",
  "tempfile",
  "winit",

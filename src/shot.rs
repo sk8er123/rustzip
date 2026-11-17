@@ -29,7 +29,7 @@ pub fn drive(app: &mut RustZipApp, ctx: &egui::Context) {
     let img = shot.image.lock().ok().and_then(|mut s| s.take());
     if let Some(img) = img {
         if let Err(e) = save_png(&shot.path, &img) {
-            eprintln!("스크린샷 저장 실패: {e}");
+            eprintln!("{}", trf!("스크린샷 저장 실패: {e}", "Could not save the screenshot: {e}"));
         }
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }

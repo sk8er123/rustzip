@@ -4,8 +4,12 @@
 //!   rustzip [archive]                 open an archive passed on the command line
 //!   rustzip --screenshot out.png      draw ~120 frames, save a PNG, exit
 //!   rustzip --self-test out.json      run the scripted self-test, save results, exit
+//!   rustzip --lang ko|en              interface language for this run (default: saved choice, then the system's)
 
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
+#[macro_use]
+mod i18n;
 
 mod app;
 mod dialogs;
@@ -25,15 +29,23 @@ struct Args {
     archive: Option<PathBuf>,
     screenshot: Option<PathBuf>,
     selftest: Option<PathBuf>,
+    lang: Option<i18n::Lang>,
 }
 
 fn parse_args() -> Args {
-    let mut args = Args { archive: None, screenshot: None, selftest: None };
+    let mut args = Args { archive: None, screenshot: None, selftest: None, lang: None };
     let mut it = std::env::args_os().skip(1);
     while let Some(a) = it.next() {
         match a.to_str() {
             Some("--screenshot") => args.screenshot = it.next().map(PathBuf::from),
             Some("--self-test") => args.selftest = it.next().map(PathBuf::from),
+            Some("--lang") => {
+                let code = it.next().map(|v| v.to_string_lossy().into_owned()).unwrap_or_default();
+                args.lang = i18n::Lang::from_code(&code);
+                if args.lang.is_none() {
+                    eprintln!("--lang: unknown language '{code}' (use ko or en)");
+                }
+            }
             _ => {
                 if args.archive.is_none() {
                     args.archive = Some(PathBuf::from(a));
@@ -104,7 +116,7 @@ fn setup_style(ctx: &egui::Context) {
             fonts.families.entry(fam).or_default().insert(0, "korean".into());
         }
     } else {
-        eprintln!("한글 글꼴을 찾지 못했습니다. 한글이 네모로 보일 수 있습니다.");
+        eprintln!("{}", tr!("한글 글꼴을 찾지 못했습니다. 한글이 네모로 보일 수 있습니다.", "No font with Korean characters was found; Korean text may show as boxes."));
     }
     ctx.set_fonts(fonts);
     ctx.set_theme(egui::Theme::Light);
@@ -159,6 +171,7 @@ fn demo_archive(dir: &Path) -> anyhow::Result<PathBuf> {
 
 fn main() -> eframe::Result<()> {
     let args = parse_args();
+    i18n::set_lang(args.lang.or_else(i18n::saved_lang).unwrap_or_else(i18n::system_lang));
     let background = args.screenshot.is_some() || args.selftest.is_some();
 
     let mut viewport = egui::ViewportBuilder::default()

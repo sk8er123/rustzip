@@ -1,4 +1,4 @@
-//! A small built-in file/folder chooser (Korean UI, works the same on every OS).
+//! A small built-in file/folder chooser (works the same on every OS).
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -28,11 +28,11 @@ pub enum PickPurpose {
 impl PickPurpose {
     fn title(self) -> &'static str {
         match self {
-            PickPurpose::OpenArchive => "압축 파일 열기",
-            PickPurpose::ExtractDest => "압축을 풀 폴더 선택",
-            PickPurpose::CreateSources => "압축할 파일과 폴더 선택",
-            PickPurpose::CreateDest => "압축 파일 저장 위치",
-            PickPurpose::AddSources => "추가할 파일과 폴더 선택",
+            PickPurpose::OpenArchive => tr!("압축 파일 열기", "Open archive"),
+            PickPurpose::ExtractDest => tr!("압축을 풀 폴더 선택", "Choose a folder to extract to"),
+            PickPurpose::CreateSources => tr!("압축할 파일과 폴더 선택", "Choose files and folders to compress"),
+            PickPurpose::CreateDest => tr!("압축 파일 저장 위치", "Save archive as"),
+            PickPurpose::AddSources => tr!("추가할 파일과 폴더 선택", "Choose files and folders to add"),
         }
     }
     fn multi(self) -> bool {
@@ -85,25 +85,25 @@ fn first_existing(base: &Path, names: &[&str]) -> Option<PathBuf> {
 /// Common places shown on the left of the chooser.
 fn places() -> Vec<(String, PathBuf)> {
     let home = home_dir();
-    let mut v = vec![("홈".to_string(), home.clone())];
+    let mut v = vec![(tr!("홈", "Home").to_string(), home.clone())];
     if let Some(p) = first_existing(&home, &["Desktop", "바탕화면", "바탕 화면"]) {
-        v.push(("바탕 화면".into(), p));
+        v.push((tr!("바탕 화면", "Desktop").into(), p));
     }
     if let Some(p) = first_existing(&home, &["Documents", "문서"]) {
-        v.push(("문서".into(), p));
+        v.push((tr!("문서", "Documents").into(), p));
     }
     if let Some(p) = first_existing(&home, &["Downloads", "다운로드"]) {
-        v.push(("다운로드".into(), p));
+        v.push((tr!("다운로드", "Downloads").into(), p));
     }
     if cfg!(windows) {
         for letter in b'A'..=b'Z' {
             let d = PathBuf::from(format!("{}:\\", letter as char));
             if d.is_dir() {
-                v.push((format!("드라이브 {}:", letter as char), d));
+                v.push((trf!("드라이브 {}:", "Drive {}:", letter as char), d));
             }
         }
     } else {
-        v.push(("컴퓨터 (/)".into(), PathBuf::from("/")));
+        v.push((tr!("컴퓨터 (/)", "Computer (/)").into(), PathBuf::from("/")));
     }
     v
 }
@@ -163,7 +163,7 @@ impl Picker {
                 }
                 self.items.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
             }
-            Err(e) => self.error = Some(format!("폴더를 열 수 없습니다: {e}")),
+            Err(e) => self.error = Some(trf!("폴더를 열 수 없습니다: {}", "Cannot open the folder: {}", crate::i18n::describe_error(&e.into()))),
         }
     }
 
@@ -175,19 +175,19 @@ impl Picker {
             ui.heading(self.purpose.title());
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                if ui.button("⬆ 상위 폴더").clicked() {
+                if ui.button(tr!("⬆ 상위 폴더", "⬆ Up")).clicked() {
                     if let Some(parent) = self.dir.parent().map(Path::to_path_buf) {
                         self.go(parent);
                     }
                 }
-                ui.label("위치:");
+                ui.label(tr!("위치:", "Location:"));
                 let r = ui.add(egui::TextEdit::singleline(&mut self.dir_text).desired_width(470.0));
-                if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) || ui.button("이동").clicked() {
+                if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) || ui.button(tr!("이동", "Go")).clicked() {
                     let p = PathBuf::from(self.dir_text.trim());
                     if p.is_dir() {
                         self.go(p);
                     } else {
-                        self.error = Some("그런 폴더가 없습니다.".into());
+                        self.error = Some(tr!("그런 폴더가 없습니다.", "That folder does not exist.").into());
                     }
                 }
             });
@@ -204,7 +204,7 @@ impl Picker {
                         }
                     }
                     ui.add_space(8.0);
-                    if ui.checkbox(&mut self.show_hidden, "숨김 파일 보기").changed() {
+                    if ui.checkbox(&mut self.show_hidden, tr!("숨김 파일 보기", "Show hidden files")).changed() {
                         self.refresh();
                     }
                 });
@@ -215,7 +215,7 @@ impl Picker {
                             ui.colored_label(Color32::from_rgb(200, 40, 40), err);
                         }
                         if self.items.is_empty() && self.error.is_none() {
-                            ui.weak("(비어 있음)");
+                            ui.weak(tr!("(비어 있음)", "(empty)"));
                         }
                         for item in &self.items {
                             let sel = self.selected.contains(&item.path);
@@ -267,22 +267,22 @@ impl Picker {
             ui.separator();
             if self.purpose.wants_name() {
                 ui.horizontal(|ui| {
-                    ui.label("파일 이름:");
+                    ui.label(tr!("파일 이름:", "File name:"));
                     ui.add(egui::TextEdit::singleline(&mut self.file_name).desired_width(400.0));
                 });
             }
             if self.purpose.multi() {
-                ui.weak("Ctrl 또는 Shift를 누른 채 누르면 여러 개를 고를 수 있습니다.");
+                ui.weak(tr!("Ctrl 또는 Shift를 누른 채 누르면 여러 개를 고를 수 있습니다.", "Hold Ctrl or Shift to choose several items."));
             }
             ui.horizontal(|ui| {
                 let ok_label = match self.purpose {
-                    PickPurpose::OpenArchive => "열기",
-                    PickPurpose::ExtractDest => "이 폴더 선택",
-                    PickPurpose::CreateDest => "저장",
-                    _ => "선택",
+                    PickPurpose::OpenArchive => tr!("열기", "Open"),
+                    PickPurpose::ExtractDest => tr!("이 폴더 선택", "Choose this folder"),
+                    PickPurpose::CreateDest => tr!("저장", "Save"),
+                    _ => tr!("선택", "Choose"),
                 };
                 let ok = ui.add(egui::Button::new(RichText::new(ok_label).strong()).min_size(egui::vec2(90.0, 26.0))).clicked();
-                let cancel = ui.add(egui::Button::new("취소").min_size(egui::vec2(70.0, 26.0))).clicked();
+                let cancel = ui.add(egui::Button::new(tr!("취소", "Cancel")).min_size(egui::vec2(70.0, 26.0))).clicked();
                 if cancel {
                     result = Some(PickResult::Cancelled);
                 }
@@ -305,7 +305,7 @@ impl Picker {
                 match pick {
                     Some(p) => Some(PickResult::Paths(purpose, vec![p])),
                     None => {
-                        self.error = Some("열 압축 파일을 고르세요.".into());
+                        self.error = Some(tr!("열 압축 파일을 고르세요.", "Choose an archive to open.").into());
                         None
                     }
                 }
@@ -317,7 +317,7 @@ impl Picker {
             PickPurpose::CreateDest => {
                 let name = self.file_name.trim();
                 if name.is_empty() {
-                    self.error = Some("파일 이름을 입력하세요.".into());
+                    self.error = Some(tr!("파일 이름을 입력하세요.", "Enter a file name.").into());
                     return None;
                 }
                 Some(PickResult::Paths(purpose, vec![self.dir.join(name)]))
@@ -330,7 +330,7 @@ impl Picker {
                     }
                 }
                 if v.is_empty() {
-                    self.error = Some("파일이나 폴더를 하나 이상 고르세요.".into());
+                    self.error = Some(tr!("파일이나 폴더를 하나 이상 고르세요.", "Choose at least one file or folder.").into());
                     None
                 } else {
                     Some(PickResult::Paths(purpose, v))

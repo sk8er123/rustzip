@@ -114,49 +114,58 @@ impl RustZipApp {
         let editable = self.editable();
         let has_sel = !self.selected.is_empty();
         egui::MenuBar::new().ui(ui, |ui| {
-            ui.menu_button("파일(F)", |ui| {
-                if ui.add(egui::Button::new("압축 파일 열기...").shortcut_text("Ctrl+O")).clicked() {
+            ui.menu_button(tr!("파일(F)", "File"), |ui| {
+                if ui.add(egui::Button::new(tr!("압축 파일 열기...", "Open archive...")).shortcut_text("Ctrl+O")).clicked() {
                     self.actions.push(Action::PickOpen);
                 }
-                if ui.add(egui::Button::new("새로 압축하기...").shortcut_text("Ctrl+N")).clicked() {
+                if ui.add(egui::Button::new(tr!("새로 압축하기...", "New archive...")).shortcut_text("Ctrl+N")).clicked() {
                     self.actions.push(Action::NewArchive(Vec::new()));
                 }
-                if ui.add_enabled(has, egui::Button::new("압축 파일 닫기")).clicked() {
+                if ui.add_enabled(has, egui::Button::new(tr!("압축 파일 닫기", "Close archive"))).clicked() {
                     self.actions.push(Action::Close);
                 }
                 ui.separator();
-                if ui.button("끝내기").clicked() {
+                if ui.button(tr!("끝내기", "Exit")).clicked() {
                     self.actions.push(Action::Quit);
                 }
             });
-            ui.menu_button("작업(A)", |ui| {
-                if ui.add_enabled(has, egui::Button::new("압축 풀기...").shortcut_text("Ctrl+E")).clicked() {
+            ui.menu_button(tr!("작업(A)", "Actions"), |ui| {
+                if ui.add_enabled(has, egui::Button::new(tr!("압축 풀기...", "Extract...")).shortcut_text("Ctrl+E")).clicked() {
                     self.actions.push(Action::ShowExtract);
                 }
-                if ui.add_enabled(editable, egui::Button::new("파일 추가...")).clicked() {
+                if ui.add_enabled(editable, egui::Button::new(tr!("파일 추가...", "Add files..."))).clicked() {
                     self.actions.push(Action::ShowAdd(Vec::new()));
                 }
-                if ui.add_enabled(editable && has_sel, egui::Button::new("선택 항목 삭제").shortcut_text("Del")).clicked() {
+                if ui.add_enabled(editable && has_sel, egui::Button::new(tr!("선택 항목 삭제", "Delete selected")).shortcut_text("Del")).clicked() {
                     self.actions.push(Action::AskDelete);
                 }
                 ui.separator();
-                if ui.add_enabled(has, egui::Button::new("모두 선택").shortcut_text("Ctrl+A")).clicked() {
+                if ui.add_enabled(has, egui::Button::new(tr!("모두 선택", "Select all")).shortcut_text("Ctrl+A")).clicked() {
                     self.selected = self.view.iter().map(|c| c.path.clone()).collect();
                 }
-                if ui.add_enabled(has && !self.cur_dir.is_empty(), egui::Button::new("상위 폴더로").shortcut_text("Backspace")).clicked() {
+                if ui.add_enabled(has && !self.cur_dir.is_empty(), egui::Button::new(tr!("상위 폴더로", "Up one folder")).shortcut_text("Backspace")).clicked() {
                     self.actions.push(Action::Up);
                 }
             });
-            ui.menu_button("보기(V)", |ui| {
-                ui.label(RichText::new("파일 이름 인코딩").strong());
+            ui.menu_button(tr!("보기(V)", "View"), |ui| {
+                ui.label(RichText::new(tr!("파일 이름 인코딩", "File name encoding")).strong());
                 for enc in NameEncoding::ALL {
                     if ui.radio(self.encoding == enc, enc.label()).clicked() {
                         self.actions.push(Action::SetEncoding(enc));
                     }
                 }
+                ui.separator();
+                // Shown in both languages so it can be found whichever is active.
+                ui.label(RichText::new("언어 / Language").strong());
+                let current = crate::i18n::lang();
+                for lang in crate::i18n::Lang::ALL {
+                    if ui.radio(current == lang, lang.native_name()).clicked() {
+                        self.actions.push(Action::SetLanguage(lang));
+                    }
+                }
             });
-            ui.menu_button("도움말(H)", |ui| {
-                if ui.button("RustZip 정보...").clicked() {
+            ui.menu_button(tr!("도움말(H)", "Help"), |ui| {
+                if ui.button(tr!("RustZip 정보...", "About RustZip...")).clicked() {
                     self.actions.push(Action::About);
                 }
             });
@@ -185,34 +194,34 @@ impl RustZipApp {
         let has_sel = !self.selected.is_empty();
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
-            if self.tool_button(ui, Tool::Open, "열기", idle, "압축 파일 열기 (Ctrl+O)") {
+            if self.tool_button(ui, Tool::Open, tr!("열기", "Open"), idle, tr!("압축 파일 열기 (Ctrl+O)", "Open an archive (Ctrl+O)")) {
                 self.actions.push(Action::PickOpen);
             }
-            if self.tool_button(ui, Tool::New, "새로 압축", idle, "파일과 폴더로 새 ZIP 만들기 (Ctrl+N)") {
+            if self.tool_button(ui, Tool::New, tr!("새로 압축", "New"), idle, tr!("파일과 폴더로 새 ZIP 만들기 (Ctrl+N)", "Make a new ZIP from files and folders (Ctrl+N)")) {
                 self.actions.push(Action::NewArchive(Vec::new()));
             }
-            if self.tool_button(ui, Tool::Extract, "압축 풀기", has, "모두 또는 선택한 파일 풀기 (Ctrl+E)") {
+            if self.tool_button(ui, Tool::Extract, tr!("압축 풀기", "Extract"), has, tr!("모두 또는 선택한 파일 풀기 (Ctrl+E)", "Extract all or the selected files (Ctrl+E)")) {
                 self.actions.push(Action::ShowExtract);
             }
             ui.add(egui::Separator::default().vertical().spacing(10.0));
-            if self.tool_button(ui, Tool::Add, "추가", editable, "열린 ZIP에 파일 추가") {
+            if self.tool_button(ui, Tool::Add, tr!("추가", "Add"), editable, tr!("열린 ZIP에 파일 추가", "Add files to the open ZIP")) {
                 self.actions.push(Action::ShowAdd(Vec::new()));
             }
-            if self.tool_button(ui, Tool::Delete, "삭제", editable && has_sel, "선택한 항목을 ZIP에서 삭제 (Del)") {
+            if self.tool_button(ui, Tool::Delete, tr!("삭제", "Delete"), editable && has_sel, tr!("선택한 항목을 ZIP에서 삭제 (Del)", "Delete the selected items from the ZIP (Del)")) {
                 self.actions.push(Action::AskDelete);
             }
-            if self.tool_button(ui, Tool::View, "파일 열기", has && self.selected.len() == 1, "선택한 파일을 연결된 프로그램으로 열기") {
+            if self.tool_button(ui, Tool::View, tr!("파일 열기", "View"), has && self.selected.len() == 1, tr!("선택한 파일을 연결된 프로그램으로 열기", "Open the selected file with its default program")) {
                 if let Some(p) = self.selected.iter().next().cloned() {
                     let is_dir = self.view.iter().any(|c| c.path == p && c.is_dir);
                     self.actions.push(if is_dir { Action::Navigate(p) } else { Action::OpenEntry(p) });
                 }
             }
             ui.add(egui::Separator::default().vertical().spacing(10.0));
-            if self.tool_button(ui, Tool::Up, "상위 폴더", has && !self.cur_dir.is_empty(), "상위 폴더로 (Backspace)") {
+            if self.tool_button(ui, Tool::Up, tr!("상위 폴더", "Up"), has && !self.cur_dir.is_empty(), tr!("상위 폴더로 (Backspace)", "Up one folder (Backspace)")) {
                 self.actions.push(Action::Up);
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if self.tool_button(ui, Tool::Info, "정보", true, "RustZip 정보") {
+                if self.tool_button(ui, Tool::Info, tr!("정보", "About"), true, tr!("RustZip 정보", "About RustZip")) {
                     self.actions.push(Action::About);
                 }
             });
@@ -222,9 +231,9 @@ impl RustZipApp {
     fn path_bar(&mut self, ui: &mut egui::Ui) {
         self.hud.path_bar = true;
         ui.horizontal(|ui| {
-            ui.label(RichText::new("위치").color(Color32::from_gray(90)));
+            ui.label(RichText::new(tr!("위치", "Location")).color(Color32::from_gray(90)));
             let Some(l) = self.listing.clone() else {
-                ui.weak("열린 압축 파일이 없습니다");
+                ui.weak(tr!("열린 압축 파일이 없습니다", "No archive is open"));
                 return;
             };
             let arch = l.path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
@@ -238,10 +247,10 @@ impl RustZipApp {
                 if enc != self.encoding {
                     self.actions.push(Action::SetEncoding(enc));
                 }
-                ui.label("이름 인코딩");
+                ui.label(tr!("이름 인코딩", "Name encoding"));
                 ui.add_space(6.0);
                 if l.any_encrypted() {
-                    ui.label(RichText::new(" 암호 ").color(Color32::WHITE).background_color(Color32::from_rgb(0xC0, 0x8A, 0x10)));
+                    ui.label(RichText::new(tr!(" 암호 ", " Encrypted ")).color(Color32::WHITE).background_color(Color32::from_rgb(0xC0, 0x8A, 0x10)));
                 }
                 ui.label(RichText::new(format!(" {} ", l.kind.label())).color(Color32::WHITE).background_color(icons::ACCENT).strong());
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
@@ -290,13 +299,13 @@ impl RustZipApp {
                     let dirs = self.view.iter().filter(|c| c.is_dir).count();
                     let files = self.view.len() - dirs;
                     let sel_size: u64 = self.view.iter().filter(|c| self.selected.contains(&c.path)).map(|c| c.size).sum();
-                    ui.label(format!("압축 파일 {}", engine::format_size(l.archive_size)));
+                    ui.label(trf!("압축 파일 {}", "Archive {}", engine::format_size(l.archive_size)));
                     ui.separator();
                     if !self.selected.is_empty() {
-                        ui.label(format!("{}개 선택 ({})", self.selected.len(), engine::format_size(sel_size)));
+                        ui.label(trf!("{}개 선택 ({})", "{} selected ({})", self.selected.len(), engine::format_size(sel_size)));
                         ui.separator();
                     }
-                    ui.label(format!("폴더 {dirs}개, 파일 {files}개"));
+                    ui.label(trf!("폴더 {dirs}개, 파일 {files}개", "{dirs} folder(s), {files} file(s)"));
                 }
             });
         });
@@ -306,7 +315,7 @@ impl RustZipApp {
         self.hud.tree = true;
         let Some(l) = self.listing.clone() else { return };
         ui.add_space(4.0);
-        ui.label(RichText::new("폴더").strong().color(Color32::from_gray(80)));
+        ui.label(RichText::new(tr!("폴더", "Folders")).strong().color(Color32::from_gray(80)));
         ui.separator();
         egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
             let arch = l.path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
@@ -429,11 +438,11 @@ impl RustZipApp {
             .column(Column::initial(140.0).at_least(100.0))
             .auto_shrink([false, false])
             .header(24.0, |mut header| {
-                header.col(|ui| self.header_cell(ui, "이름", SortCol::Name));
-                header.col(|ui| self.header_cell(ui, "크기", SortCol::Size));
-                header.col(|ui| self.header_cell(ui, "압축 크기", SortCol::Packed));
-                header.col(|ui| self.header_cell(ui, "압축률", SortCol::Ratio));
-                header.col(|ui| self.header_cell(ui, "수정한 날짜", SortCol::Modified));
+                header.col(|ui| self.header_cell(ui, tr!("이름", "Name"), SortCol::Name));
+                header.col(|ui| self.header_cell(ui, tr!("크기", "Size"), SortCol::Size));
+                header.col(|ui| self.header_cell(ui, tr!("압축 크기", "Packed"), SortCol::Packed));
+                header.col(|ui| self.header_cell(ui, tr!("압축률", "Ratio"), SortCol::Ratio));
+                header.col(|ui| self.header_cell(ui, tr!("수정한 날짜", "Modified"), SortCol::Modified));
             })
             .body(|body| {
                 body.rows(22.0, row_count, |mut row| {
@@ -445,7 +454,7 @@ impl RustZipApp {
                             ui.add(egui::Label::new("..").selectable(false));
                         });
                         row.col(|ui| {
-                            ui.add(egui::Label::new(RichText::new("상위 폴더").weak()).selectable(false));
+                            ui.add(egui::Label::new(RichText::new(tr!("상위 폴더", "Parent folder")).weak()).selectable(false));
                         });
                         row.col(|_| {});
                         row.col(|_| {});
@@ -493,19 +502,19 @@ impl RustZipApp {
                     }
                     resp.context_menu(|ui| {
                         if c.is_dir {
-                            if ui.button("폴더 열기").clicked() {
+                            if ui.button(tr!("폴더 열기", "Open folder")).clicked() {
                                 menu_actions.push(Action::Navigate(c.path.clone()));
                                 ui.close();
                             }
-                        } else if ui.button("열기").clicked() {
+                        } else if ui.button(tr!("열기", "Open")).clicked() {
                             menu_actions.push(Action::OpenEntry(c.path.clone()));
                             ui.close();
                         }
-                        if ui.button("압축 풀기...").clicked() {
+                        if ui.button(tr!("압축 풀기...", "Extract...")).clicked() {
                             menu_actions.push(Action::ShowExtract);
                             ui.close();
                         }
-                        if ui.add_enabled(editable, egui::Button::new("삭제")).clicked() {
+                        if ui.add_enabled(editable, egui::Button::new(tr!("삭제", "Delete"))).clicked() {
                             menu_actions.push(Action::AskDelete);
                             ui.close();
                         }
@@ -559,21 +568,21 @@ impl RustZipApp {
         p.rect(rect, 12, Color32::from_rgb(0xF7, 0xFA, 0xFE), Stroke::new(2.0, Color32::from_rgb(0xB9, 0xD0, 0xF2)), StrokeKind::Inside);
         let c = rect.center();
         icons::archive_box(&p, egui::Rect::from_center_size(c - vec2(0.0, 80.0), vec2(48.0, 48.0)), true);
-        p.text(c - vec2(0.0, 24.0), egui::Align2::CENTER_CENTER, "압축 파일이나 압축할 파일을 이 창으로 끌어다 놓으세요", egui::FontId::proportional(19.0), Color32::from_gray(50));
+        p.text(c - vec2(0.0, 24.0), egui::Align2::CENTER_CENTER, tr!("압축 파일이나 압축할 파일을 이 창으로 끌어다 놓으세요", "Drag an archive, or files to compress, into this window"), egui::FontId::proportional(19.0), Color32::from_gray(50));
         p.text(
             c + vec2(0.0, 6.0),
             egui::Align2::CENTER_CENTER,
-            "ZIP · 7Z · TAR · TAR.GZ · TAR.BZ2 · TAR.XZ · GZ 를 열 수 있고, ZIP으로 압축할 수 있습니다",
+            tr!("ZIP · 7Z · TAR · TAR.GZ · TAR.BZ2 · TAR.XZ · GZ 를 열 수 있고, ZIP으로 압축할 수 있습니다", "Opens ZIP · 7Z · TAR · TAR.GZ · TAR.BZ2 · TAR.XZ · GZ and compresses to ZIP"),
             egui::FontId::proportional(13.5),
             Color32::from_gray(110),
         );
         let btn_area = egui::Rect::from_center_size(c + vec2(0.0, 52.0), vec2(300.0, 34.0));
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(btn_area).layout(Layout::left_to_right(Align::Center)));
         child.spacing_mut().item_spacing.x = 16.0;
-        if child.add(egui::Button::new(RichText::new("압축 파일 열기").size(15.0)).min_size(vec2(140.0, 32.0))).clicked() {
+        if child.add(egui::Button::new(RichText::new(tr!("압축 파일 열기", "Open archive")).size(15.0)).min_size(vec2(140.0, 32.0))).clicked() {
             self.actions.push(Action::PickOpen);
         }
-        if child.add(egui::Button::new(RichText::new("새로 압축하기").size(15.0)).min_size(vec2(140.0, 32.0))).clicked() {
+        if child.add(egui::Button::new(RichText::new(tr!("새로 압축하기", "New archive")).size(15.0)).min_size(vec2(140.0, 32.0))).clicked() {
             self.actions.push(Action::NewArchive(Vec::new()));
         }
     }
@@ -586,7 +595,11 @@ impl RustZipApp {
         let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("drop_overlay")));
         painter.rect_filled(screen, 0, Color32::from_rgba_unmultiplied(30, 111, 217, 60));
         painter.rect_stroke(screen.shrink(8.0), 10, Stroke::new(3.0, icons::ACCENT), StrokeKind::Inside);
-        let msg = if self.editable() { "놓으면 압축 파일을 열거나 지금 ZIP에 추가합니다" } else { "놓으면 압축 파일을 열거나 새로 압축합니다" };
+        let msg = if self.editable() {
+            tr!("놓으면 압축 파일을 열거나 지금 ZIP에 추가합니다", "Drop to open an archive or add to this ZIP")
+        } else {
+            tr!("놓으면 압축 파일을 열거나 새로 압축합니다", "Drop to open an archive or make a new one")
+        };
         painter.text(screen.center(), egui::Align2::CENTER_CENTER, msg, egui::FontId::proportional(22.0), icons::ACCENT_DARK);
     }
 }
