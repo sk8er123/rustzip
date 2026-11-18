@@ -232,5 +232,14 @@ RustZip은 다음 프로젝트 위에서 만들어졌습니다.
 
 ## 라이선스
 
-이 프로젝트의 라이선스는 아직 정하지 않았습니다.
-함께 쓰는 구성 요소는 각자의 라이선스를 따릅니다. 특히 RAR 해제에 쓰는 **UnRAR 소스는 RAR 압축기를 만드는 데 쓸 수 없다**는 조건이 있습니다.
+
+RustZip은 [MIT 라이선스](LICENSE)로 배포합니다.
+개인과 기업 모두 무료로 사용, 수정, 재배포할 수 있으며 상업적 용도로도 쓸 수 있습니다.
+재배포할 때는 저작권 표시와 라이선스 전문을 함께 포함해 주세요.
+
+함께 쓰는 구성 요소는 각자의 라이선스를 따릅니다. 자세한 내용은 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)에 정리해 두었습니다.
+
+- **UnRAR** — RAR 해제에 쓰는 RARLAB UnRAR 소스는 무료로 쓸 수 있지만, RAR 압축 알고리즘을 다시 만드는 데 쓸 수 없다는 조건이 있습니다. RustZip은 RAR 파일을 풀기만 하고 만들지 않습니다.
+- **EggDotNet** (MIT, Copyright (c) 2026 Andrew Kolman) — AZO 해독기는 EggDotNet의 코드를 Rust로 옮긴 것이고, EGG·ALZ 테스트 샘플도 EggDotNet에서 가져왔습니다.
+- **lhasa** (ISC) — LZH 테스트 샘플을 가져왔습니다.
+
